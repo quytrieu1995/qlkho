@@ -240,8 +240,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     }
   }, async (request: WebhookRequest, reply: FastifyReply) => {
     const signature = request.headers["x-nhanh-signature"] as string | undefined;
-    const rawBody =
-      (request as FastifyRequest & { rawBody?: string }).rawBody ?? JSON.stringify(request.body ?? {});
+    const rawBody = String(
+      (request as FastifyRequest & { rawBody?: string }).rawBody ?? JSON.stringify(request.body ?? {})
+    );
     const isValid = verifyNhanhSignature(rawBody, signature);
     if (!isValid) {
       webhookRejectedCounter.inc({ reason: "invalid_signature" });

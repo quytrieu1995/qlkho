@@ -1,8 +1,13 @@
-import type { SocketStream } from "@fastify/websocket";
+type LiveSocket = {
+  OPEN: number;
+  readyState: number;
+  send: (payload: string) => void;
+  on: (event: "close", listener: () => void) => void;
+};
 
-const clients = new Set<SocketStream["socket"]>();
+const clients = new Set<LiveSocket>();
 
-export function registerSocket(socket: SocketStream["socket"]): void {
+export function registerSocket(socket: LiveSocket): void {
   clients.add(socket);
   socket.on("close", () => clients.delete(socket));
 }

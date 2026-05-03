@@ -29,8 +29,9 @@ await app.register(fastifyRateLimit, {
 await app.register(websocket);
 app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
   try {
-    (request as FastifyRequest & { rawBody?: string }).rawBody = body;
-    done(null, JSON.parse(body));
+    const rawBody = typeof body === "string" ? body : body.toString("utf8");
+    (request as FastifyRequest & { rawBody?: string }).rawBody = rawBody;
+    done(null, JSON.parse(rawBody));
   } catch (error) {
     done(error as Error);
   }
@@ -40,10 +41,12 @@ const subscriber = redis.duplicate();
 await subscriber.subscribe("sales-events");
 subscriber.on("message", (_channel, raw) => {
   try {
-    const packet = JSON.parse(raw) as { event?: string; payload?: Record<string, unknown> };
+    const rawMessage = typeof raw === "string" ? raw : raw.toString("utf8");
+    const packet = JSON.parse(rawMessage) as { event?: string; payload?: Record<string, unknown> };
     broadcast(packet.event ?? "sync.updated", packet.payload ?? {});
   } catch {
-    broadcast("sync.updated", { raw });
+    const fallbackMessage = typeof raw === "string" ? raw : raw.toString("utf8");
+    broadcast("sync.updated", { raw: fallbackMessage });
   }
 });
 
