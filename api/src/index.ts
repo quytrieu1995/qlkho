@@ -39,14 +39,12 @@ app.addContentTypeParser("application/json", { parseAs: "string" }, (request, bo
 
 const subscriber = redis.duplicate();
 await subscriber.subscribe("sales-events");
-subscriber.on("message", (_channel, raw) => {
+subscriber.on("message", (_channel: string, rawMessage: string) => {
   try {
-    const rawMessage = typeof raw === "string" ? raw : raw.toString("utf8");
     const packet = JSON.parse(rawMessage) as { event?: string; payload?: Record<string, unknown> };
     broadcast(packet.event ?? "sync.updated", packet.payload ?? {});
   } catch {
-    const fallbackMessage = typeof raw === "string" ? raw : raw.toString("utf8");
-    broadcast("sync.updated", { raw: fallbackMessage });
+    broadcast("sync.updated", { raw: rawMessage });
   }
 });
 
