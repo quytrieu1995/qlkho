@@ -1,6 +1,6 @@
 import dotenv from "dotenv";
 import { Worker } from "bullmq";
-import IORedis from "ioredis";
+import { Redis } from "ioredis";
 import pg from "pg";
 
 dotenv.config();
@@ -17,7 +17,7 @@ const pool = new pg.Pool({
   max: 20
 });
 
-const redis = new IORedis(redisUrl, {
+const redis = new Redis(redisUrl, {
   maxRetriesPerRequest: null
 });
 
