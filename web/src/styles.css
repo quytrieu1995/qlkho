@@ -1,0 +1,82 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+article,
+pre {
+  background: #111827;
+  border-radius: 12px;
+  padding: 14px;
+  border: 1px solid #1f2937;
+}
+
+input {
+  width: 100%;
+  margin-top: 6px;
+  margin-bottom: 12px;
+  background: #0b1220;
+  color: #f8fafc;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+button {
+  background: #2563eb;
+  color: #fff;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+
+.login {
+  max-width: 380px;
+}
+
+ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+li {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px dashed #374151;
+}
+
+li:last-child {
+  border-bottom: 0;
+}
+
+.error {
+  color: #fecaca;
+}
+
+.critical {
+  color: #fca5a5;
+  font-weight: 700;
+}

@@ -1,0 +1,147 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: qlkho-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-sales}
+      POSTGRES_USER: ${POSTGRES_USER:-sales}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sales}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sales} -d ${POSTGRES_DB:-sales}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app-net
+
+  redis:
+    image: redis:7-alpine
+    container_name: qlkho-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks:
+      - app-net
+
+  api:
+    build:
+      context: ./api
+    container_name: qlkho-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK:-traefik}
+      - traefik.http.routers.qlkho-api.rule=Host(`${WEB_HOST}`) && PathPrefix(`/api`)
+      - traefik.http.routers.qlkho-api.entrypoints=websecure
+      - traefik.http.routers.qlkho-api.tls=true
+      - traefik.http.routers.qlkho-api.priority=100
+      - traefik.http.routers.qlkho-api.middlewares=qlkho-api-strip
+      - traefik.http.middlewares.qlkho-api-strip.stripprefix.prefixes=/api
+      - traefik.http.services.qlkho-api.loadbalancer.server.port=4000
+    networks:
+      - app-net
+      - traefik
+
+  worker:
+    build:
+      context: ./worker
+    container_name: qlkho-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - app-net
+
+  web:
+    build:
+      context: ./web
+      args:
+        VITE_API_BASE: https://${WEB_HOST}/api
+        VITE_SOCKET_URL: https://${WEB_HOST}/api
+    container_name: qlkho-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK:-traefik}
+      - traefik.http.routers.qlkho-web.rule=Host(`${WEB_HOST}`)
+      - traefik.http.routers.qlkho-web.entrypoints=websecure
+      - traefik.http.routers.qlkho-web.tls=true
+      - traefik.http.services.qlkho-web.loadbalancer.server.port=80
+    networks:
+      - app-net
+      - traefik
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: qlkho-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    depends_on:
+      - api
+    networks:
+      - app-net
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: qlkho-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      - prometheus
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=${TRAEFIK_NETWORK:-traefik}
+      - traefik.http.routers.qlkho-grafana.rule=Host(`${GRAFANA_HOST}`)
+      - traefik.http.routers.qlkho-grafana.entrypoints=websecure
+      - traefik.http.routers.qlkho-grafana.tls=true
+      - traefik.http.services.qlkho-grafana.loadbalancer.server.port=3000
+    networks:
+      - app-net
+      - traefik
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  app-net:
+    driver: bridge
+  traefik:
+    external: true
+    name: ${TRAEFIK_NETWORK:-traefik}
