@@ -25,6 +25,7 @@ type WebhookRequest = FastifyRequest<{
     data?: Record<string, unknown>;
   };
 }>;
+const allowedRoles = ["admin", "sales", "kho"] as const;
 
 async function enqueueEvent(payload: SyncEventPayload): Promise<void> {
   const syncJob = await pool.query(
@@ -69,6 +70,146 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/v1/products", { preHandler: [requireRoles(["admin", "sales", "kho"])] }, async (request) => {
     const limit = Number((request.query as { limit?: string }).limit ?? "100");
     return listProducts(limit);
+  });
+
+  app.post("/v1/products", { preHandler: [requireRoles(["admin", "kho"])] }, async (request, reply) => {
+    const body = request.body as {
+      sku?: string;
+      name?: string;
+      category?: string;
+      unitPrice?: number;
+      stock?: number;
+      externalId?: string;
+    };
+    const sku = String(body.sku ?? "").trim();
+    const name = String(body.name ?? "").trim();
+    if (!sku || !name) {
+      return reply.code(400).send({ error: "sku and name are required" });
+    }
+
+    const result = await pool.query(
+      `
+        INSERT INTO products(external_id, sku, name, category, unit_price, stock, updated_at)
+        VALUES($1, $2, $3, $4, $5, $6, NOW())
+        RETURNING *
+      `,
+      [
+        String(body.externalId ?? ""),
+        sku,
+        name,
+        String(body.category ?? ""),
+        Number(body.unitPrice ?? 0),
+        Math.max(0, Math.trunc(Number(body.stock ?? 0)))
+      ]
+    );
+    return reply.code(201).send(result.rows[0]);
+  });
+
+  app.put("/v1/products/:id", { preHandler: [requireRoles(["admin", "kho"])] }, async (request, reply) => {
+    const params = request.params as { id: string };
+    const body = request.body as {
+      sku?: string;
+      name?: string;
+      category?: string;
+      unitPrice?: number;
+      stock?: number;
+    };
+    const result = await pool.query(
+      `
+        UPDATE products
+        SET sku = COALESCE($2, sku),
+            name = COALESCE($3, name),
+            category = COALESCE($4, category),
+            unit_price = COALESCE($5, unit_price),
+            stock = COALESCE($6, stock),
+            updated_at = NOW()
+        WHERE id = $1::uuid
+        RETURNING *
+      `,
+      [
+        params.id,
+        body.sku ?? null,
+        body.name ?? null,
+        body.category ?? null,
+        body.unitPrice ?? null,
+        typeof body.stock === "number" ? Math.max(0, Math.trunc(body.stock)) : null
+      ]
+    );
+    if (result.rowCount === 0) {
+      return reply.code(404).send({ error: "Product not found" });
+    }
+    return result.rows[0];
+  });
+
+  app.get("/v1/customers", { preHandler: [requireRoles(["admin", "sales"])] }, async (request) => {
+    const limit = Number((request.query as { limit?: string }).limit ?? "100");
+    const safeLimit = Math.min(Math.max(limit, 1), 500);
+    const { rows } = await pool.query(
+      `
+        SELECT id, external_id, full_name, phone, email, address, updated_at, created_at
+        FROM customers
+        ORDER BY updated_at DESC
+        LIMIT $1
+      `,
+      [safeLimit]
+    );
+    return rows;
+  });
+
+  app.post("/v1/customers", { preHandler: [requireRoles(["admin", "sales"])] }, async (request, reply) => {
+    const body = request.body as {
+      fullName?: string;
+      phone?: string;
+      email?: string;
+      address?: string;
+      externalId?: string;
+    };
+    const fullName = String(body.fullName ?? "").trim();
+    if (!fullName) {
+      return reply.code(400).send({ error: "fullName is required" });
+    }
+    const result = await pool.query(
+      `
+        INSERT INTO customers(external_id, full_name, phone, email, address, updated_at)
+        VALUES($1, $2, $3, $4, $5, NOW())
+        RETURNING *
+      `,
+      [
+        String(body.externalId ?? ""),
+        fullName,
+        String(body.phone ?? ""),
+        String(body.email ?? ""),
+        String(body.address ?? "")
+      ]
+    );
+    return reply.code(201).send(result.rows[0]);
+  });
+
+  app.put("/v1/customers/:id", { preHandler: [requireRoles(["admin", "sales"])] }, async (request, reply) => {
+    const params = request.params as { id: string };
+    const body = request.body as {
+      fullName?: string;
+      phone?: string;
+      email?: string;
+      address?: string;
+    };
+    const result = await pool.query(
+      `
+        UPDATE customers
+        SET full_name = COALESCE($2, full_name),
+            phone = COALESCE($3, phone),
+            email = COALESCE($4, email),
+            address = COALESCE($5, address),
+            updated_at = NOW()
+        WHERE id = $1::uuid
+        RETURNING *
+      `,
+      [params.id, body.fullName ?? null, body.phone ?? null, body.email ?? null, body.address ?? null]
+    );
+    if (result.rowCount === 0) {
+      return reply.code(404).send({ error: "Customer not found" });
+    }
+    return result.rows[0];
   });
 
   app.post("/v1/auth/bootstrap", async (request, reply) => {
@@ -141,6 +282,41 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return { ok: true };
   });
 
+  app.get("/v1/users", { preHandler: [requireRoles(["admin"])] }, async () => {
+    const { rows } = await pool.query(
+      `
+        SELECT id, username, role, is_active, created_at, updated_at
+        FROM app_users
+        ORDER BY created_at DESC
+      `
+    );
+    return rows;
+  });
+
+  app.patch("/v1/users/:id", { preHandler: [requireRoles(["admin"])] }, async (request, reply) => {
+    const params = request.params as { id: string };
+    const body = request.body as { role?: "admin" | "sales" | "kho"; isActive?: boolean };
+    const role = body.role ?? null;
+    if (role && !allowedRoles.includes(role)) {
+      return reply.code(400).send({ error: "Invalid role" });
+    }
+    const result = await pool.query(
+      `
+        UPDATE app_users
+        SET role = COALESCE($2, role),
+            is_active = COALESCE($3, is_active),
+            updated_at = NOW()
+        WHERE id = $1::uuid
+        RETURNING id, username, role, is_active, created_at, updated_at
+      `,
+      [params.id, role, typeof body.isActive === "boolean" ? body.isActive : null]
+    );
+    if (result.rowCount === 0) {
+      return reply.code(404).send({ error: "User not found" });
+    }
+    return result.rows[0];
+  });
+
   app.post("/v1/inventory/inbound", { preHandler: [requireRoles(["admin", "kho"])] }, async (request, reply) => {
     const body = request.body as {
       productId?: string;
@@ -182,6 +358,21 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/v1/inventory/transactions", { preHandler: [requireRoles(["admin", "kho", "sales"])] }, async (request) => {
     const limit = Number((request.query as { limit?: string }).limit ?? "100");
     return listInventoryTransactions(limit);
+  });
+
+  app.get("/v1/inventory/stock", { preHandler: [requireRoles(["admin", "kho", "sales"])] }, async (request) => {
+    const limit = Number((request.query as { limit?: string }).limit ?? "200");
+    const safeLimit = Math.min(Math.max(limit, 1), 1000);
+    const { rows } = await pool.query(
+      `
+        SELECT id, sku, name, category, stock, unit_price, updated_at
+        FROM products
+        ORDER BY stock ASC, updated_at DESC
+        LIMIT $1
+      `,
+      [safeLimit]
+    );
+    return rows;
   });
 
   app.get("/v1/reports/revenue", { preHandler: [requireRoles(["admin", "sales"])] }, async (request, reply) => {

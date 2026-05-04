@@ -66,12 +66,20 @@ curl -X POST "https://<WEB_HOST>/api/v1/sync/pull" \
 - `POST /api/v1/auth/login`
 - `GET /api/v1/auth/me`
 - `POST /api/v1/users` (admin)
+- `GET /api/v1/users` (admin)
+- `PATCH /api/v1/users/:id` (admin)
 - `GET /api/v1/dashboard`
 - `GET /api/v1/orders?limit=20`
 - `GET /api/v1/products?limit=50`
+- `POST /api/v1/products`
+- `PUT /api/v1/products/:id`
+- `GET /api/v1/customers?limit=100`
+- `POST /api/v1/customers`
+- `PUT /api/v1/customers/:id`
 - `POST /api/v1/inventory/inbound`
 - `POST /api/v1/inventory/outbound`
 - `GET /api/v1/inventory/transactions`
+- `GET /api/v1/inventory/stock`
 - `GET /api/v1/reports/revenue?from=&to=&groupBy=day|month&channel=`
 - `POST /api/v1/webhooks/nhanh`
 - `POST /api/v1/sync/pull`
