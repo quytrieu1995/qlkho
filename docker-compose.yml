@@ -45,20 +45,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    labels:
-      - traefik.enable=true
-      - traefik.constraint-label=${TRAEFIK_CONSTRAINT_LABEL:-hostinger}
-      - traefik.docker.network=${TRAEFIK_NETWORK:-traefik}
-      - traefik.http.routers.qlkho-api.rule=Host(`${WEB_HOST}`) && PathPrefix(`/api`)
-      - traefik.http.routers.qlkho-api.entrypoints=websecure
-      - traefik.http.routers.qlkho-api.tls=true
-      - traefik.http.routers.qlkho-api.priority=100
-      - traefik.http.routers.qlkho-api.middlewares=qlkho-api-strip
-      - traefik.http.middlewares.qlkho-api-strip.stripprefix.prefixes=/api
-      - traefik.http.services.qlkho-api.loadbalancer.server.port=4000
     networks:
       - app-net
-      - traefik
 
   worker:
     build:
@@ -89,7 +77,7 @@ services:
       - traefik.enable=true
       - traefik.constraint-label=${TRAEFIK_CONSTRAINT_LABEL:-hostinger}
       - traefik.docker.network=${TRAEFIK_NETWORK:-traefik}
-      - traefik.http.routers.qlkho-web.rule=Host(`${WEB_HOST}`) && !PathPrefix(`/api`)
+      - traefik.http.routers.qlkho-web.rule=Host(`${WEB_HOST}`)
       - traefik.http.routers.qlkho-web.entrypoints=websecure
       - traefik.http.routers.qlkho-web.tls=true
       - traefik.http.services.qlkho-web.loadbalancer.server.port=80
