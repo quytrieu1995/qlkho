@@ -217,7 +217,7 @@ export function App() {
         <article className="metric-card">
           <p className="metric-title">San pham can nhap</p>
           <strong>{metrics?.lowStockProducts ?? 0}</strong>
-          <span className="metric-subtitle">Ton kho <= 5</span>
+          <span className="metric-subtitle">Ton kho &lt;= 5</span>
         </article>
         <article className="metric-card">
           <p className="metric-title">Hang doi dong bo</p>
