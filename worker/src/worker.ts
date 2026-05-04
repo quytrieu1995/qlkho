@@ -142,7 +142,7 @@ async function upsertProduct(payload: Record<string, unknown>): Promise<void> {
       Math.trunc(extractNumber(payload.remain ?? payload.stock ?? 0))
     ]
   );
-  if (updatedBySku.rowCount > 0) {
+  if ((updatedBySku.rowCount ?? 0) > 0) {
     return;
   }
 
@@ -168,7 +168,7 @@ async function upsertProduct(payload: Record<string, unknown>): Promise<void> {
         Math.trunc(extractNumber(payload.remain ?? payload.stock ?? 0))
       ]
     );
-    if (updatedByExternal.rowCount > 0) {
+    if ((updatedByExternal.rowCount ?? 0) > 0) {
       return;
     }
   }
