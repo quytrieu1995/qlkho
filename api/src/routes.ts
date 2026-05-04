@@ -24,6 +24,9 @@ type WebhookRequest = FastifyRequest<{
     eventType?: string;
     resourceId?: string;
     changedAt?: string;
+    webhooksVerifyToken?: string;
+    verifyToken?: string;
+    webhookVerifyToken?: string;
     data?: Record<string, unknown>;
   };
 }>;
@@ -958,7 +961,23 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const signature = request.headers["x-nhanh-signature"] as string | undefined;
     const rawBody = JSON.stringify(request.body ?? {});
     const accounts = await getNhanhAccounts();
-    const matchedAccount = accounts.find((item) => verifyNhanhSignature(rawBody, signature, item.webhookSecret));
+    const bodyTokenCandidates = [
+      request.body.webhooksVerifyToken,
+      request.body.verifyToken,
+      request.body.webhookVerifyToken,
+      String(request.body.data?.webhooksVerifyToken ?? ""),
+      String(request.body.data?.verifyToken ?? ""),
+      String(request.body.data?.webhookVerifyToken ?? "")
+    ]
+      .map((item) => String(item ?? "").trim())
+      .filter((item) => item.length > 0);
+
+    const matchedAccount = accounts.find((item) => {
+      if (verifyNhanhSignature(rawBody, signature, item.webhookSecret)) {
+        return true;
+      }
+      return bodyTokenCandidates.includes(item.webhookSecret);
+    });
     if (!matchedAccount) {
       webhookRejectedCounter.inc({ reason: "invalid_signature" });
       return reply.code(401).send({ error: "Invalid webhook signature" });
