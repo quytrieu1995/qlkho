@@ -88,6 +88,75 @@ export interface RevenueRow {
   gross_revenue: number;
 }
 
+type InventoryMode = "in" | "out" | "adjust";
+
+async function applyInventoryLine(
+  client: Awaited<ReturnType<typeof pool.connect>>,
+  input: {
+    mode: InventoryMode;
+    productId: string;
+    quantity: number;
+    unitCost?: number;
+    referenceCode?: string;
+    note?: string;
+    createdBy?: string;
+  }
+): Promise<void> {
+  const productId = String(input.productId ?? "").trim();
+  if (!productId) {
+    throw new Error("productId is required");
+  }
+
+  // "adjust" uses target stock directly (can be 0); in/out uses positive delta quantity.
+  const rawQuantity = Number(input.quantity ?? 0);
+  const quantity = input.mode === "adjust" ? Math.trunc(rawQuantity) : Math.trunc(Math.abs(rawQuantity));
+  if (input.mode === "adjust") {
+    if (quantity < 0) {
+      throw new Error("Target stock must be greater than or equal to 0");
+    }
+  } else if (quantity <= 0) {
+    throw new Error("Quantity must be greater than 0");
+  }
+
+  const productResult = await client.query(
+    `
+      SELECT stock
+      FROM products
+      WHERE id = $1
+      FOR UPDATE
+    `,
+    [productId]
+  );
+  if (productResult.rowCount === 0) {
+    throw new Error(`Product not found: ${productId}`);
+  }
+
+  const currentStock = Number(productResult.rows[0].stock);
+  const delta = input.mode === "out" ? -quantity : quantity;
+  const nextStock = input.mode === "adjust" ? quantity : currentStock + delta;
+  if (nextStock < 0) {
+    throw new Error("Insufficient stock");
+  }
+
+  await client.query(
+    `
+      UPDATE products
+      SET stock = $2,
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+    [productId, nextStock]
+  );
+
+  await client.query(
+    `
+      INSERT INTO inventory_transactions(product_id, type, quantity, unit_cost, reference_code, note, created_by)
+      VALUES($1, $2, $3, $4, $5, $6, $7)
+    `,
+    [productId, input.mode, quantity, input.unitCost ?? 0, input.referenceCode ?? null, input.note ?? null, input.createdBy ?? null]
+  );
+}
+
 export async function recordInventoryTransaction(input: {
   productId: string;
   type: "in" | "out" | "adjust";
@@ -177,70 +246,60 @@ export async function recordInventoryBulkTransaction(input: {
     await client.query("BEGIN");
     let processedCount = 0;
     for (const item of input.items) {
-      const productId = String(item.productId ?? "").trim();
-      if (!productId) {
-        throw new Error("productId is required");
-      }
-
-      // "adjust" uses target stock directly (can be 0); in/out uses positive delta quantity.
-      const rawQuantity = Number(item.quantity ?? 0);
-      const quantity = input.mode === "adjust" ? Math.trunc(rawQuantity) : Math.trunc(Math.abs(rawQuantity));
-      if (input.mode === "adjust") {
-        if (quantity < 0) {
-          throw new Error("Target stock must be greater than or equal to 0");
-        }
-      } else if (quantity <= 0) {
-        throw new Error("Quantity must be greater than 0");
-      }
-
-      const productResult = await client.query(
-        `
-          SELECT stock
-          FROM products
-          WHERE id = $1
-          FOR UPDATE
-        `,
-        [productId]
-      );
-      if (productResult.rowCount === 0) {
-        throw new Error(`Product not found: ${productId}`);
-      }
-
-      const currentStock = Number(productResult.rows[0].stock);
-      const delta = input.mode === "out" ? -quantity : quantity;
-      const nextStock = input.mode === "adjust" ? quantity : currentStock + delta;
-      if (nextStock < 0) {
-        throw new Error("Insufficient stock");
-      }
-
-      await client.query(
-        `
-          UPDATE products
-          SET stock = $2,
-              updated_at = NOW()
-          WHERE id = $1
-        `,
-        [productId, nextStock]
-      );
-
-      await client.query(
-        `
-          INSERT INTO inventory_transactions(product_id, type, quantity, unit_cost, reference_code, note, created_by)
-          VALUES($1, $2, $3, $4, $5, $6, $7)
-        `,
-        [
-          productId,
-          input.mode,
-          quantity,
-          item.unitCost ?? 0,
-          input.referenceCode ?? null,
-          item.note ?? input.commonNote ?? null,
-          input.createdBy ?? null
-        ]
-      );
+      await applyInventoryLine(client, {
+        mode: input.mode,
+        productId: item.productId,
+        quantity: item.quantity,
+        unitCost: item.unitCost,
+        referenceCode: input.referenceCode,
+        note: item.note ?? input.commonNote ?? undefined,
+        createdBy: input.createdBy
+      });
       processedCount += 1;
     }
 
+    if (processedCount === 0) {
+      throw new Error("No valid items to process");
+    }
+    await client.query("COMMIT");
+    return processedCount;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function recordInventoryMixedTransaction(input: {
+  items: Array<{ mode: InventoryMode; productId: string; quantity: number; unitCost?: number; note?: string }>;
+  referenceCode?: string;
+  commonNote?: string;
+  createdBy?: string;
+}): Promise<number> {
+  if (!Array.isArray(input.items) || input.items.length === 0) {
+    throw new Error("items is required");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    let processedCount = 0;
+    for (const item of input.items) {
+      if (!["in", "out", "adjust"].includes(item.mode)) {
+        throw new Error(`Invalid mode: ${item.mode}`);
+      }
+      await applyInventoryLine(client, {
+        mode: item.mode,
+        productId: item.productId,
+        quantity: item.quantity,
+        unitCost: item.unitCost,
+        referenceCode: input.referenceCode,
+        note: item.note ?? input.commonNote ?? undefined,
+        createdBy: input.createdBy
+      });
+      processedCount += 1;
+    }
     if (processedCount === 0) {
       throw new Error("No valid items to process");
     }

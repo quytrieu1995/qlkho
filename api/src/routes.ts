@@ -9,6 +9,7 @@ import {
   listOrders,
   listProducts,
   recordInventoryBulkTransaction,
+  recordInventoryMixedTransaction,
   recordInventoryTransaction
 } from "./services/sales.js";
 import { broadcast } from "./realtime.js";
@@ -598,6 +599,31 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         quantity: Number(item.targetStock ?? 0),
         note: item.note
       })),
+      referenceCode: body.referenceCode,
+      commonNote: body.note,
+      createdBy: getRequester(request).id
+    });
+    return reply.send({ ok: true, count: processedCount });
+  });
+
+  app.post("/v1/inventory/mixed", { preHandler: [requireRoles(["admin", "kho"])] }, async (request, reply) => {
+    const body = request.body as {
+      referenceCode?: string;
+      note?: string;
+      items?: Array<{ mode?: "in" | "out" | "adjust"; productId?: string; quantity?: number; targetStock?: number; unitCost?: number; note?: string }>;
+    };
+    const items = Array.isArray(body.items) ? body.items : [];
+    const processedCount = await recordInventoryMixedTransaction({
+      items: items.map((item) => {
+        const mode = item.mode ?? "in";
+        return {
+          mode,
+          productId: String(item.productId ?? ""),
+          quantity: mode === "adjust" ? Number(item.targetStock ?? item.quantity ?? 0) : Number(item.quantity ?? 0),
+          unitCost: Number(item.unitCost ?? 0),
+          note: item.note
+        };
+      }),
       referenceCode: body.referenceCode,
       commonNote: body.note,
       createdBy: getRequester(request).id

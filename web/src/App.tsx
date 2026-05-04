@@ -75,7 +75,8 @@ type CurrentUser = {
 };
 
 type ModuleId = "dashboard" | "products" | "customers" | "inventory" | "orders" | "shipping" | "users";
-type ModalId = "product" | "customer" | "inventorySingle" | "inventoryBulk" | "inventoryAdjust" | "order" | "shipping" | "user";
+type InventoryMixedMode = "in" | "out" | "adjust";
+type ModalId = "product" | "customer" | "inventorySingle" | "inventoryMixed" | "order" | "shipping" | "user";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:4000";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL ?? "ws://localhost:4000";
@@ -162,16 +163,10 @@ export function App() {
     referenceCode: "",
     note: ""
   });
-  const [inventoryBulkForm, setInventoryBulkForm] = useState({
-    mode: "in",
+  const [inventoryMixedForm, setInventoryMixedForm] = useState({
     referenceCode: "",
     note: "",
-    lines: [{ productId: "", quantity: 1, unitCost: 0 }]
-  });
-  const [inventoryAdjustForm, setInventoryAdjustForm] = useState({
-    referenceCode: "",
-    note: "",
-    lines: [{ productId: "", targetStock: 0 }]
+    lines: [{ productId: "", mode: "in" as InventoryMixedMode, quantity: 1, targetStock: 0, unitCost: 0, note: "" }]
   });
   const [orderForm, setOrderForm] = useState({
     customerId: "",
@@ -381,58 +376,36 @@ export function App() {
     }
   };
 
-  const createInventoryBulk = async () => {
+  const createInventoryMixed = async () => {
     if (!token) return;
     try {
-      const filteredItems = inventoryBulkForm.lines.filter((line) => line.productId && Number(line.quantity) > 0);
+      const filteredItems = inventoryMixedForm.lines.filter((line) => {
+        if (!line.productId) return false;
+        if (line.mode === "adjust") return Number.isFinite(Number(line.targetStock)) && Number(line.targetStock) >= 0;
+        return Number(line.quantity) > 0;
+      });
       if (filteredItems.length === 0) {
         throw new Error("Cần ít nhất 1 dòng sản phẩm hợp lệ.");
       }
-      const endpoint = inventoryBulkForm.mode === "in" ? "/v1/inventory/inbound" : "/v1/inventory/bulk";
-      const payload =
-        inventoryBulkForm.mode === "in"
-          ? {
-              referenceCode: inventoryBulkForm.referenceCode,
-              note: inventoryBulkForm.note,
-              items: filteredItems.map((line) => ({
-                productId: line.productId,
-                quantity: Number(line.quantity),
-                unitCost: Number(line.unitCost)
-              }))
-            }
-          : {
-              mode: "out",
-              referenceCode: inventoryBulkForm.referenceCode,
-              note: inventoryBulkForm.note,
-              items: filteredItems.map((line) => ({
-                productId: line.productId,
-                quantity: Number(line.quantity)
-              }))
-            };
-      await mutateJson(endpoint, token, "POST", payload);
-      setNotice(inventoryBulkForm.mode === "in" ? "Đã tạo phiếu nhập hàng nhiều sản phẩm." : "Đã tạo phiếu xuất kho nhiều sản phẩm.");
-      setInventoryBulkForm({ mode: "in", referenceCode: "", note: "", lines: [{ productId: "", quantity: 1, unitCost: 0 }] });
-      setActiveModal(null);
-      await refresh();
-    } catch (err) {
-      setError(String(err));
-    }
-  };
 
-  const createInventoryAdjust = async () => {
-    if (!token) return;
-    try {
-      const filteredItems = inventoryAdjustForm.lines.filter((line) => line.productId);
-      if (filteredItems.length === 0) {
-        throw new Error("Cần chọn ít nhất 1 sản phẩm để điều chỉnh.");
-      }
-      await mutateJson("/v1/inventory/adjustment", token, "POST", {
-        referenceCode: inventoryAdjustForm.referenceCode,
-        note: inventoryAdjustForm.note,
-        items: filteredItems
+      await mutateJson("/v1/inventory/mixed", token, "POST", {
+        referenceCode: inventoryMixedForm.referenceCode,
+        note: inventoryMixedForm.note,
+        items: filteredItems.map((line) => ({
+          mode: line.mode,
+          productId: line.productId,
+          quantity: line.mode === "adjust" ? undefined : Number(line.quantity),
+          targetStock: line.mode === "adjust" ? Number(line.targetStock) : undefined,
+          unitCost: line.mode === "in" ? Number(line.unitCost) : undefined,
+          note: line.note || undefined
+        }))
       });
-      setNotice("Đã điều chỉnh tồn kho theo số lượng mục tiêu.");
-      setInventoryAdjustForm({ referenceCode: "", note: "", lines: [{ productId: "", targetStock: 0 }] });
+      setNotice("Đã xử lý phiếu kho nhiều sản phẩm (nhập/xuất/điều chỉnh).");
+      setInventoryMixedForm({
+        referenceCode: "",
+        note: "",
+        lines: [{ productId: "", mode: "in", quantity: 1, targetStock: 0, unitCost: 0, note: "" }]
+      });
       setActiveModal(null);
       await refresh();
     } catch (err) {
@@ -769,8 +742,7 @@ export function App() {
                 <header className="card-head"><h2>Thao tác kho</h2></header>
                 <div className="action-stack">
                   <button className="primary-btn" onClick={() => setActiveModal("inventorySingle")}>Nhập/Xuất kho lẻ</button>
-                  <button className="primary-btn" onClick={() => setActiveModal("inventoryBulk")}>Nhập/Xuất nhiều sản phẩm</button>
-                  <button className="primary-btn" onClick={() => setActiveModal("inventoryAdjust")}>Điều chỉnh tồn nhiều sản phẩm</button>
+                  <button className="primary-btn" onClick={() => setActiveModal("inventoryMixed")}>Nhập/Xuất/Điều chỉnh nhiều sản phẩm</button>
                 </div>
               </article>
             </section>
@@ -899,8 +871,7 @@ export function App() {
                   {activeModal === "product" && (editingProductId ? "Cập nhật sản phẩm" : "Thêm sản phẩm")}
                   {activeModal === "customer" && (editingCustomerId ? "Cập nhật khách hàng" : "Thêm khách hàng")}
                   {activeModal === "inventorySingle" && "Tạo giao dịch kho lẻ"}
-                  {activeModal === "inventoryBulk" && "Tạo phiếu nhập/xuất nhiều sản phẩm"}
-                  {activeModal === "inventoryAdjust" && "Điều chỉnh tồn kho"}
+                  {activeModal === "inventoryMixed" && "Tạo phiếu kho nhiều sản phẩm"}
                   {activeModal === "order" && "Tạo đơn hàng mới"}
                   {activeModal === "shipping" && "Tạo vận đơn mới"}
                   {activeModal === "user" && "Tạo người dùng"}
@@ -956,20 +927,26 @@ export function App() {
                 </>
               ) : null}
 
-              {activeModal === "inventoryBulk" ? (
+              {activeModal === "inventoryMixed" ? (
                 <>
-                  <select value={inventoryBulkForm.mode} onChange={(e) => setInventoryBulkForm((p) => ({ ...p, mode: e.target.value }))}>
-                    <option value="in">Nhập kho nhiều dòng</option>
-                    <option value="out">Xuất kho nhiều dòng</option>
-                  </select>
-                  <input placeholder="Mã phiếu" value={inventoryBulkForm.referenceCode} onChange={(e) => setInventoryBulkForm((p) => ({ ...p, referenceCode: e.target.value }))} />
-                  <input placeholder="Ghi chú" value={inventoryBulkForm.note} onChange={(e) => setInventoryBulkForm((p) => ({ ...p, note: e.target.value }))} />
-                  {inventoryBulkForm.lines.map((line, idx) => (
+                  <input placeholder="Mã phiếu" value={inventoryMixedForm.referenceCode} onChange={(e) => setInventoryMixedForm((p) => ({ ...p, referenceCode: e.target.value }))} />
+                  <input placeholder="Ghi chú chung" value={inventoryMixedForm.note} onChange={(e) => setInventoryMixedForm((p) => ({ ...p, note: e.target.value }))} />
+                  {inventoryMixedForm.lines.map((line, idx) => (
                     <div key={`bulk-${idx}`}>
+                      <select value={line.mode} onChange={(e) => {
+                        const nextMode = e.target.value as InventoryMixedMode;
+                        const lines = [...inventoryMixedForm.lines];
+                        lines[idx] = { ...lines[idx], mode: nextMode };
+                        setInventoryMixedForm((p) => ({ ...p, lines }));
+                      }}>
+                        <option value="in">Nhập</option>
+                        <option value="out">Xuất</option>
+                        <option value="adjust">Điều chỉnh</option>
+                      </select>
                       <select value={line.productId} onChange={(e) => {
-                        const lines = [...inventoryBulkForm.lines];
+                        const lines = [...inventoryMixedForm.lines];
                         lines[idx] = { ...lines[idx], productId: e.target.value };
-                        setInventoryBulkForm((p) => ({ ...p, lines }));
+                        setInventoryMixedForm((p) => ({ ...p, lines }));
                       }}>
                         <option value="">Chọn sản phẩm</option>
                         {products.map((item) => (
@@ -978,63 +955,43 @@ export function App() {
                       </select>
                       <input
                         type="number"
-                        placeholder="Số lượng"
-                        value={line.quantity}
+                        placeholder={line.mode === "adjust" ? "Tồn mục tiêu" : "Số lượng"}
+                        value={line.mode === "adjust" ? line.targetStock : line.quantity}
                         onChange={(e) => {
-                          const lines = [...inventoryBulkForm.lines];
-                          lines[idx] = { ...lines[idx], quantity: Number(e.target.value) };
-                          setInventoryBulkForm((p) => ({ ...p, lines }));
+                          const lines = [...inventoryMixedForm.lines];
+                          if (line.mode === "adjust") {
+                            lines[idx] = { ...lines[idx], targetStock: Number(e.target.value) };
+                          } else {
+                            lines[idx] = { ...lines[idx], quantity: Number(e.target.value) };
+                          }
+                          setInventoryMixedForm((p) => ({ ...p, lines }));
                         }}
                       />
-                      {inventoryBulkForm.mode === "in" ? (
+                      {line.mode === "in" ? (
                         <input
                           type="number"
                           placeholder="Đơn giá nhập"
                           value={line.unitCost}
                           onChange={(e) => {
-                            const lines = [...inventoryBulkForm.lines];
+                            const lines = [...inventoryMixedForm.lines];
                             lines[idx] = { ...lines[idx], unitCost: Number(e.target.value) };
-                            setInventoryBulkForm((p) => ({ ...p, lines }));
+                            setInventoryMixedForm((p) => ({ ...p, lines }));
                           }}
                         />
                       ) : null}
-                    </div>
-                  ))}
-                  <button className="ghost-btn" onClick={() => setInventoryBulkForm((p) => ({ ...p, lines: [...p.lines, { productId: "", quantity: 1, unitCost: 0 }] }))}>+ Thêm dòng</button>
-                  <button className="primary-btn" onClick={() => void createInventoryBulk()}>Lưu phiếu nhiều dòng</button>
-                </>
-              ) : null}
-
-              {activeModal === "inventoryAdjust" ? (
-                <>
-                  <input placeholder="Mã kiểm kê" value={inventoryAdjustForm.referenceCode} onChange={(e) => setInventoryAdjustForm((p) => ({ ...p, referenceCode: e.target.value }))} />
-                  <input placeholder="Ghi chú điều chỉnh" value={inventoryAdjustForm.note} onChange={(e) => setInventoryAdjustForm((p) => ({ ...p, note: e.target.value }))} />
-                  {inventoryAdjustForm.lines.map((line, idx) => (
-                    <div key={`adjust-${idx}`}>
-                      <select value={line.productId} onChange={(e) => {
-                        const lines = [...inventoryAdjustForm.lines];
-                        lines[idx] = { ...lines[idx], productId: e.target.value };
-                        setInventoryAdjustForm((p) => ({ ...p, lines }));
-                      }}>
-                        <option value="">Chọn sản phẩm</option>
-                        {products.map((item) => (
-                          <option key={item.id} value={item.id}>{item.sku} - {item.name}</option>
-                        ))}
-                      </select>
                       <input
-                        type="number"
-                        placeholder="Tồn mục tiêu"
-                        value={line.targetStock}
+                        placeholder="Ghi chú dòng"
+                        value={line.note}
                         onChange={(e) => {
-                          const lines = [...inventoryAdjustForm.lines];
-                          lines[idx] = { ...lines[idx], targetStock: Number(e.target.value) };
-                          setInventoryAdjustForm((p) => ({ ...p, lines }));
+                          const lines = [...inventoryMixedForm.lines];
+                          lines[idx] = { ...lines[idx], note: e.target.value };
+                          setInventoryMixedForm((p) => ({ ...p, lines }));
                         }}
                       />
                     </div>
                   ))}
-                  <button className="ghost-btn" onClick={() => setInventoryAdjustForm((p) => ({ ...p, lines: [...p.lines, { productId: "", targetStock: 0 }] }))}>+ Thêm dòng</button>
-                  <button className="primary-btn" onClick={() => void createInventoryAdjust()}>Xác nhận điều chỉnh</button>
+                  <button className="ghost-btn" onClick={() => setInventoryMixedForm((p) => ({ ...p, lines: [...p.lines, { productId: "", mode: "in", quantity: 1, targetStock: 0, unitCost: 0, note: "" }] }))}>+ Thêm dòng</button>
+                  <button className="primary-btn" onClick={() => void createInventoryMixed()}>Lưu phiếu kho nhiều dòng</button>
                 </>
               ) : null}
 
