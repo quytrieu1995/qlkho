@@ -76,7 +76,17 @@ type CurrentUser = {
 
 type ModuleId = "dashboard" | "products" | "customers" | "inventory" | "orders" | "shipping" | "users";
 type InventoryMixedMode = "in" | "out" | "adjust";
-type ModalId = "product" | "customer" | "inventorySingle" | "inventoryMixed" | "order" | "shipping" | "user";
+type ModalId = "product" | "customer" | "inventorySingle" | "inventoryMixed" | "order" | "shipping" | "user" | "nhanhAccount";
+
+type NhanhAccount = {
+  id: string;
+  name: string;
+  appId: string;
+  accessToken: string;
+  webhookSecret: string;
+  baseUrl: string;
+  isActive: boolean;
+};
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:4000";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL ?? "ws://localhost:4000";
@@ -150,6 +160,7 @@ export function App() {
   const [inventoryTx, setInventoryTx] = useState<InventoryTransaction[]>([]);
   const [shippings, setShippings] = useState<Shipping[]>([]);
   const [users, setUsers] = useState<User[]>([]);
+  const [nhanhAccounts, setNhanhAccounts] = useState<NhanhAccount[]>([]);
   const [events, setEvents] = useState<string[]>([]);
 
   const [editingProductId, setEditingProductId] = useState("");
@@ -187,6 +198,15 @@ export function App() {
     note: ""
   });
   const [userForm, setUserForm] = useState({ username: "", password: "", role: "sales" });
+  const [editingNhanhAccountId, setEditingNhanhAccountId] = useState("");
+  const [nhanhAccountForm, setNhanhAccountForm] = useState({
+    name: "",
+    appId: "",
+    accessToken: "",
+    webhookSecret: "",
+    baseUrl: "https://open.nhanh.vn",
+    isActive: true
+  });
 
   const canManageUsers = currentUser?.role === "admin";
   const canManageCatalog = currentUser?.role === "admin" || currentUser?.role === "kho";
@@ -214,8 +234,12 @@ export function App() {
       setInventoryTx(txData);
       setShippings(shippingData);
       if (canManageUsers) {
-        const userData = await fetchJson<User[]>("/v1/users", token);
+        const [userData, nhanhAccountData] = await Promise.all([
+          fetchJson<User[]>("/v1/users", token),
+          fetchJson<NhanhAccount[]>("/v1/integrations/nhanh/accounts", token)
+        ]);
         setUsers(userData);
+        setNhanhAccounts(nhanhAccountData);
       }
       setError("");
     } catch (err) {
@@ -493,6 +517,53 @@ export function App() {
     } catch (err) {
       setError(String(err));
     }
+  };
+
+  const saveNhanhAccount = async () => {
+    if (!token) return;
+    try {
+      const payload = {
+        name: nhanhAccountForm.name,
+        appId: nhanhAccountForm.appId,
+        accessToken: nhanhAccountForm.accessToken,
+        webhookSecret: nhanhAccountForm.webhookSecret,
+        baseUrl: nhanhAccountForm.baseUrl,
+        isActive: nhanhAccountForm.isActive
+      };
+      if (editingNhanhAccountId) {
+        await mutateJson(`/v1/integrations/nhanh/accounts/${editingNhanhAccountId}`, token, "PUT", payload);
+        setNotice("Đã cập nhật kết nối nhanh.vn.");
+      } else {
+        await mutateJson("/v1/integrations/nhanh/accounts", token, "POST", payload);
+        setNotice("Đã thêm kết nối nhanh.vn.");
+      }
+      setEditingNhanhAccountId("");
+      setNhanhAccountForm({
+        name: "",
+        appId: "",
+        accessToken: "",
+        webhookSecret: "",
+        baseUrl: "https://open.nhanh.vn",
+        isActive: true
+      });
+      setActiveModal(null);
+      await refresh();
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  const editNhanhAccount = (item: NhanhAccount) => {
+    setEditingNhanhAccountId(item.id);
+    setNhanhAccountForm({
+      name: item.name,
+      appId: item.appId,
+      accessToken: item.accessToken,
+      webhookSecret: item.webhookSecret,
+      baseUrl: item.baseUrl,
+      isActive: item.isActive
+    });
+    setActiveModal("nhanhAccount");
   };
 
   const toggleUser = async (item: User) => {
@@ -839,9 +910,30 @@ export function App() {
           <section className="card">
             <header className="card-head card-head-row">
               <h2>Danh sách người dùng</h2>
-              {canManageUsers ? (
-                <button className="primary-btn" onClick={() => setActiveModal("user")}>+ Tạo người dùng</button>
-              ) : null}
+              <div className="action-inline">
+                {canManageUsers ? (
+                  <button className="primary-btn" onClick={() => setActiveModal("user")}>+ Tạo người dùng</button>
+                ) : null}
+                {canManageUsers ? (
+                  <button
+                    className="ghost-btn"
+                    onClick={() => {
+                      setEditingNhanhAccountId("");
+                      setNhanhAccountForm({
+                        name: "",
+                        appId: "",
+                        accessToken: "",
+                        webhookSecret: "",
+                        baseUrl: "https://open.nhanh.vn",
+                        isActive: true
+                      });
+                      setActiveModal("nhanhAccount");
+                    }}
+                  >
+                    + Kết nối nhanh.vn
+                  </button>
+                ) : null}
+              </div>
             </header>
             <div className="table-wrap">
               <table>
@@ -860,6 +952,30 @@ export function App() {
                 </tbody>
               </table>
             </div>
+            {canManageUsers ? (
+              <>
+                <header className="card-head"><h2>Kết nối nhanh.vn</h2></header>
+                <div className="table-wrap">
+                  <table>
+                    <thead>
+                      <tr><th>Tên kết nối</th><th>App ID</th><th>Webhook secret</th><th>Base URL</th><th>Trạng thái</th><th>Thao tác</th></tr>
+                    </thead>
+                    <tbody>
+                      {nhanhAccounts.map((item) => (
+                        <tr key={item.id}>
+                          <td>{item.name}</td>
+                          <td>{item.appId}</td>
+                          <td>{item.webhookSecret}</td>
+                          <td>{item.baseUrl}</td>
+                          <td>{item.isActive ? "Hoạt động" : "Tạm dừng"}</td>
+                          <td><button className="ghost-btn" onClick={() => editNhanhAccount(item)}>Sửa</button></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            ) : null}
           </section>
         )}
 
@@ -875,6 +991,7 @@ export function App() {
                   {activeModal === "order" && "Tạo đơn hàng mới"}
                   {activeModal === "shipping" && "Tạo vận đơn mới"}
                   {activeModal === "user" && "Tạo người dùng"}
+                  {activeModal === "nhanhAccount" && (editingNhanhAccountId ? "Cập nhật kết nối nhanh.vn" : "Thêm kết nối nhanh.vn")}
                 </h2>
                 <button className="ghost-btn" onClick={() => setActiveModal(null)}>Đóng</button>
               </header>
@@ -1092,6 +1209,25 @@ export function App() {
                   </>
                 ) : (
                   <p className="text-muted">Chỉ admin có quyền thao tác module này.</p>
+                )
+              ) : null}
+
+              {activeModal === "nhanhAccount" ? (
+                canManageUsers ? (
+                  <>
+                    <input placeholder="Tên kết nối (ví dụ: Nhanh Shop A)" value={nhanhAccountForm.name} onChange={(e) => setNhanhAccountForm((p) => ({ ...p, name: e.target.value }))} />
+                    <input placeholder="NHANH_APP_ID" value={nhanhAccountForm.appId} onChange={(e) => setNhanhAccountForm((p) => ({ ...p, appId: e.target.value }))} />
+                    <input placeholder="NHANH_ACCESS_TOKEN" value={nhanhAccountForm.accessToken} onChange={(e) => setNhanhAccountForm((p) => ({ ...p, accessToken: e.target.value }))} />
+                    <input placeholder="NHANH_WEBHOOK_SECRET" value={nhanhAccountForm.webhookSecret} onChange={(e) => setNhanhAccountForm((p) => ({ ...p, webhookSecret: e.target.value }))} />
+                    <input placeholder="Base URL" value={nhanhAccountForm.baseUrl} onChange={(e) => setNhanhAccountForm((p) => ({ ...p, baseUrl: e.target.value }))} />
+                    <select value={nhanhAccountForm.isActive ? "1" : "0"} onChange={(e) => setNhanhAccountForm((p) => ({ ...p, isActive: e.target.value === "1" }))}>
+                      <option value="1">Hoạt động</option>
+                      <option value="0">Tạm dừng</option>
+                    </select>
+                    <button className="primary-btn" onClick={() => void saveNhanhAccount()}>{editingNhanhAccountId ? "Lưu cập nhật" : "Lưu kết nối"}</button>
+                  </>
+                ) : (
+                  <p className="text-muted">Chỉ admin có quyền cấu hình tích hợp nhanh.vn.</p>
                 )
               ) : null}
             </div>

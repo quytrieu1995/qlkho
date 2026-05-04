@@ -81,6 +81,18 @@ CREATE TABLE IF NOT EXISTS webhook_logs (
   received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS nhanh_accounts (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  name TEXT NOT NULL,
+  app_id TEXT NOT NULL,
+  access_token TEXT NOT NULL,
+  webhook_secret TEXT NOT NULL,
+  base_url TEXT NOT NULL DEFAULT 'https://open.nhanh.vn',
+  is_active BOOLEAN NOT NULL DEFAULT true,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS inventory_transactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   product_id UUID NOT NULL REFERENCES products(id),

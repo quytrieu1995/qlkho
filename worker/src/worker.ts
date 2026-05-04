@@ -32,8 +32,15 @@ function extractNumber(value: unknown): number {
   return 0;
 }
 
-async function upsertCustomer(data: Record<string, unknown>): Promise<string | null> {
-  const externalId = String(data.customerId ?? "");
+function scopedExternalId(accountId: string | null, externalId: string): string {
+  if (!externalId) {
+    return "";
+  }
+  return accountId ? `${accountId}:${externalId}` : externalId;
+}
+
+async function upsertCustomer(data: Record<string, unknown>, accountId: string | null): Promise<string | null> {
+  const externalId = scopedExternalId(accountId, String(data.customerId ?? ""));
   if (!externalId) {
     return null;
   }
@@ -63,8 +70,10 @@ async function upsertCustomer(data: Record<string, unknown>): Promise<string | n
 }
 
 async function upsertOrder(payload: Record<string, unknown>): Promise<void> {
-  const customerId = await upsertCustomer(payload);
-  const externalId = String(payload.id ?? "");
+  const accountId = String(payload.__nhanhAccountId ?? "").trim() || null;
+  const accountName = String(payload.__nhanhAccountName ?? "").trim();
+  const customerId = await upsertCustomer(payload, accountId);
+  const externalId = scopedExternalId(accountId, String(payload.id ?? ""));
   const orderCode = String(payload.code ?? payload.orderCode ?? externalId);
 
   if (!externalId || !orderCode) {
@@ -73,7 +82,7 @@ async function upsertOrder(payload: Record<string, unknown>): Promise<void> {
 
   const totalAmount = extractNumber(payload.moneyTransfer ?? payload.totalAmount ?? 0);
   const status = String(payload.statusName ?? payload.status ?? "new");
-  const source = String(payload.source ?? "nhanh.vn");
+  const source = accountName ? `nhanh.vn:${accountName}` : String(payload.source ?? "nhanh.vn");
   const updatedAt = String(payload.updatedDate ?? new Date().toISOString());
 
   await pool.query(
@@ -107,27 +116,77 @@ async function upsertOrder(payload: Record<string, unknown>): Promise<void> {
 }
 
 async function upsertProduct(payload: Record<string, unknown>): Promise<void> {
-  const externalId = String(payload.id ?? payload.productId ?? "");
+  const accountId = String(payload.__nhanhAccountId ?? "").trim() || null;
+  const externalId = scopedExternalId(accountId, String(payload.id ?? payload.productId ?? ""));
   const sku = String(payload.code ?? payload.sku ?? externalId);
-  if (!externalId || !sku) {
+  if (!sku) {
     return;
+  }
+
+  const updatedBySku = await pool.query(
+    `
+      UPDATE products
+      SET name = $2,
+          category = $3,
+          unit_price = $4,
+          stock = $5,
+          updated_at = NOW()
+      WHERE sku = $1
+      RETURNING id
+    `,
+    [
+      sku,
+      String(payload.name ?? "Unknown Product"),
+      String(payload.categoryName ?? ""),
+      extractNumber(payload.price ?? 0),
+      Math.trunc(extractNumber(payload.remain ?? payload.stock ?? 0))
+    ]
+  );
+  if (updatedBySku.rowCount > 0) {
+    return;
+  }
+
+  if (externalId) {
+    const updatedByExternal = await pool.query(
+      `
+        UPDATE products
+        SET sku = $2,
+            name = $3,
+            category = $4,
+            unit_price = $5,
+            stock = $6,
+            updated_at = NOW()
+        WHERE external_id = $1
+        RETURNING id
+      `,
+      [
+        externalId,
+        sku,
+        String(payload.name ?? "Unknown Product"),
+        String(payload.categoryName ?? ""),
+        extractNumber(payload.price ?? 0),
+        Math.trunc(extractNumber(payload.remain ?? payload.stock ?? 0))
+      ]
+    );
+    if (updatedByExternal.rowCount > 0) {
+      return;
+    }
   }
 
   await pool.query(
     `
       INSERT INTO products(external_id, sku, name, category, unit_price, stock, updated_at)
       VALUES($1, $2, $3, $4, $5, $6, NOW())
-      ON CONFLICT (external_id)
+      ON CONFLICT (sku)
       DO UPDATE
-      SET sku = EXCLUDED.sku,
-          name = EXCLUDED.name,
+      SET name = EXCLUDED.name,
           category = EXCLUDED.category,
           unit_price = EXCLUDED.unit_price,
           stock = EXCLUDED.stock,
           updated_at = NOW()
     `,
     [
-      externalId,
+      externalId || null,
       sku,
       String(payload.name ?? "Unknown Product"),
       String(payload.categoryName ?? ""),

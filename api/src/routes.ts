@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { syncQueue } from "./queue.js";
 import { pool } from "./db.js";
-import { verifyNhanhSignature, fetchNhanhChanges } from "./services/nhanh.js";
+import { fetchNhanhChangesForAccount, getDefaultNhanhAccountFromEnv, verifyNhanhSignature } from "./services/nhanh.js";
 import {
   getDashboardMetrics,
   getRevenueReport,
@@ -28,6 +28,15 @@ type WebhookRequest = FastifyRequest<{
   };
 }>;
 const allowedRoles = ["admin", "sales", "kho"] as const;
+type NhanhAccountRow = {
+  id: string;
+  name: string;
+  app_id: string;
+  access_token: string;
+  webhook_secret: string;
+  base_url: string;
+  is_active: boolean;
+};
 
 async function ensureOperationalTables(): Promise<void> {
   await pool.query(`
@@ -50,6 +59,48 @@ async function ensureOperationalTables(): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS nhanh_accounts (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      name TEXT NOT NULL,
+      app_id TEXT NOT NULL,
+      access_token TEXT NOT NULL,
+      webhook_secret TEXT NOT NULL,
+      base_url TEXT NOT NULL DEFAULT 'https://open.nhanh.vn',
+      is_active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
+
+async function getNhanhAccounts(opts?: { includeInactive?: boolean }) {
+  const includeInactive = opts?.includeInactive ?? false;
+  const { rows } = await pool.query<NhanhAccountRow>(
+    `
+      SELECT id, name, app_id, access_token, webhook_secret, base_url, is_active
+      FROM nhanh_accounts
+      WHERE ($1::boolean = true OR is_active = true)
+      ORDER BY created_at DESC
+    `,
+    [includeInactive]
+  );
+
+  const accounts = rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    appId: row.app_id,
+    accessToken: row.access_token,
+    webhookSecret: row.webhook_secret,
+    baseUrl: row.base_url,
+    isActive: row.is_active
+  }));
+
+  const envAccount = getDefaultNhanhAccountFromEnv();
+  if (envAccount) {
+    accounts.push({ ...envAccount, isActive: true });
+  }
+  return accounts;
 }
 
 async function enqueueEvent(payload: SyncEventPayload): Promise<void> {
@@ -497,6 +548,102 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return result.rows[0];
   });
 
+  app.get("/v1/integrations/nhanh/accounts", { preHandler: [requireRoles(["admin"])] }, async () => {
+    const accounts = await getNhanhAccounts({ includeInactive: true });
+    return accounts.map((item) => ({
+      id: item.id,
+      name: item.name,
+      appId: item.appId,
+      accessToken: item.accessToken,
+      webhookSecret: item.webhookSecret,
+      baseUrl: item.baseUrl,
+      isActive: item.isActive
+    }));
+  });
+
+  app.post("/v1/integrations/nhanh/accounts", { preHandler: [requireRoles(["admin"])] }, async (request, reply) => {
+    const body = request.body as {
+      name?: string;
+      appId?: string;
+      accessToken?: string;
+      webhookSecret?: string;
+      baseUrl?: string;
+      isActive?: boolean;
+    };
+    const name = String(body.name ?? "").trim();
+    const appId = String(body.appId ?? "").trim();
+    const accessToken = String(body.accessToken ?? "").trim();
+    const webhookSecret = String(body.webhookSecret ?? "").trim();
+    const baseUrl = String(body.baseUrl ?? "https://open.nhanh.vn").trim();
+    if (!name || !appId || !accessToken || !webhookSecret) {
+      return reply.code(400).send({ error: "name, appId, accessToken, webhookSecret are required" });
+    }
+    const result = await pool.query(
+      `
+        INSERT INTO nhanh_accounts(name, app_id, access_token, webhook_secret, base_url, is_active, updated_at)
+        VALUES($1, $2, $3, $4, $5, COALESCE($6, true), NOW())
+        RETURNING id, name, app_id, access_token, webhook_secret, base_url, is_active
+      `,
+      [name, appId, accessToken, webhookSecret, baseUrl, typeof body.isActive === "boolean" ? body.isActive : true]
+    );
+    return reply.code(201).send({
+      id: result.rows[0].id,
+      name: result.rows[0].name,
+      appId: result.rows[0].app_id,
+      accessToken: result.rows[0].access_token,
+      webhookSecret: result.rows[0].webhook_secret,
+      baseUrl: result.rows[0].base_url,
+      isActive: result.rows[0].is_active
+    });
+  });
+
+  app.put("/v1/integrations/nhanh/accounts/:id", { preHandler: [requireRoles(["admin"])] }, async (request, reply) => {
+    const params = request.params as { id: string };
+    const body = request.body as {
+      name?: string;
+      appId?: string;
+      accessToken?: string;
+      webhookSecret?: string;
+      baseUrl?: string;
+      isActive?: boolean;
+    };
+    const result = await pool.query(
+      `
+        UPDATE nhanh_accounts
+        SET name = COALESCE(NULLIF($2, ''), name),
+            app_id = COALESCE(NULLIF($3, ''), app_id),
+            access_token = COALESCE(NULLIF($4, ''), access_token),
+            webhook_secret = COALESCE(NULLIF($5, ''), webhook_secret),
+            base_url = COALESCE(NULLIF($6, ''), base_url),
+            is_active = COALESCE($7, is_active),
+            updated_at = NOW()
+        WHERE id = $1::uuid
+        RETURNING id, name, app_id, access_token, webhook_secret, base_url, is_active
+      `,
+      [
+        params.id,
+        body.name ?? "",
+        body.appId ?? "",
+        body.accessToken ?? "",
+        body.webhookSecret ?? "",
+        body.baseUrl ?? "",
+        typeof body.isActive === "boolean" ? body.isActive : null
+      ]
+    );
+    if (result.rowCount === 0) {
+      return reply.code(404).send({ error: "Nhanh account not found" });
+    }
+    return {
+      id: result.rows[0].id,
+      name: result.rows[0].name,
+      appId: result.rows[0].app_id,
+      accessToken: result.rows[0].access_token,
+      webhookSecret: result.rows[0].webhook_secret,
+      baseUrl: result.rows[0].base_url,
+      isActive: result.rows[0].is_active
+    };
+  });
+
   app.post("/v1/inventory/inbound", { preHandler: [requireRoles(["admin", "kho"])] }, async (request, reply) => {
     const body = request.body as {
       productId?: string;
@@ -773,17 +920,31 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post("/v1/sync/pull", { preHandler: [requireRoles(["admin"])] }, async (request, reply) => {
-    const body = request.body as { from?: string; to?: string };
+    const body = request.body as { from?: string; to?: string; accountId?: string; accountIds?: string[] };
     const to = body?.to ?? new Date().toISOString();
     const from = body?.from ?? new Date(Date.now() - 15 * 60_000).toISOString();
-
-    const changes = await fetchNhanhChanges(from, to);
-    for (const change of changes) {
-      await enqueueEvent(change);
+    const accountIds = Array.isArray(body.accountIds)
+      ? body.accountIds
+      : body.accountId
+        ? [body.accountId]
+        : [];
+    const allAccounts = await getNhanhAccounts();
+    const selectedAccounts = accountIds.length > 0 ? allAccounts.filter((item) => accountIds.includes(item.id)) : allAccounts;
+    if (selectedAccounts.length === 0) {
+      return reply.code(400).send({ error: "No active nhanh account found" });
     }
 
-    broadcast("sync.pull.enqueued", { count: changes.length });
-    return reply.send({ ok: true, count: changes.length });
+    let totalChanges = 0;
+    for (const account of selectedAccounts) {
+      const changes = await fetchNhanhChangesForAccount(account, from, to);
+      for (const change of changes) {
+        await enqueueEvent(change);
+      }
+      totalChanges += changes.length;
+    }
+
+    broadcast("sync.pull.enqueued", { count: totalChanges });
+    return reply.send({ ok: true, count: totalChanges, accounts: selectedAccounts.length });
   });
 
   app.post("/v1/webhooks/nhanh", {
@@ -796,8 +957,9 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   }, async (request: WebhookRequest, reply: FastifyReply) => {
     const signature = request.headers["x-nhanh-signature"] as string | undefined;
     const rawBody = JSON.stringify(request.body ?? {});
-    const isValid = verifyNhanhSignature(rawBody, signature);
-    if (!isValid) {
+    const accounts = await getNhanhAccounts();
+    const matchedAccount = accounts.find((item) => verifyNhanhSignature(rawBody, signature, item.webhookSecret));
+    if (!matchedAccount) {
       webhookRejectedCounter.inc({ reason: "invalid_signature" });
       return reply.code(401).send({ error: "Invalid webhook signature" });
     }
@@ -806,9 +968,13 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       eventType: (request.body.eventType as SyncEventPayload["eventType"]) ?? "order.updated",
       resourceId: request.body.resourceId,
       changedAt: request.body.changedAt ?? new Date().toISOString(),
-      data: request.body.data ?? {}
+      data: {
+        ...(request.body.data ?? {}),
+        __nhanhAccountId: matchedAccount.id,
+        __nhanhAccountName: matchedAccount.name
+      }
     };
-    const dedupeKey = `webhook:nhanh:${signature ?? "none"}:${payload.resourceId ?? "none"}:${payload.changedAt}`;
+    const dedupeKey = `webhook:nhanh:${matchedAccount.id}:${signature ?? "none"}:${payload.resourceId ?? "none"}:${payload.changedAt}`;
     const dedupeOk = await redis.set(dedupeKey, "1", "EX", 300, "NX");
     if (!dedupeOk) {
       webhookRejectedCounter.inc({ reason: "duplicate" });
@@ -820,7 +986,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         INSERT INTO webhook_logs(provider, event_type, signature, payload)
         VALUES ('nhanh.vn', $1, $2, $3::jsonb)
       `,
-      [payload.eventType, signature ?? "", JSON.stringify(payload)]
+      [payload.eventType, signature ?? "", JSON.stringify({ ...payload, accountId: matchedAccount.id })]
     );
 
     await enqueueEvent(payload);

@@ -263,6 +263,12 @@ button {
   gap: 10px;
 }
 
+.action-inline {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .table-wrap {
   overflow: auto;
 }
