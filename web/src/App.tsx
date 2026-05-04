@@ -28,6 +28,35 @@ type Product = {
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:4000";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL ?? "ws://localhost:4000";
 
+function formatCurrency(value: number): string {
+  return `${value.toLocaleString("vi-VN")} VND`;
+}
+
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat("vi-VN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric"
+  }).format(date);
+}
+
+function getStatusClass(status: string): string {
+  const normalized = status.toLowerCase();
+  if (normalized.includes("xac nhan") || normalized.includes("confirm") || normalized.includes("done")) {
+    return "badge success";
+  }
+  if (normalized.includes("huy") || normalized.includes("cancel") || normalized.includes("fail")) {
+    return "badge danger";
+  }
+  return "badge warning";
+}
+
 async function fetchJson<T>(path: string, token: string): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     headers: {
@@ -131,12 +160,17 @@ export function App() {
 
   if (!token) {
     return (
-      <main className="container">
-        <header>
-          <h1>QLKho Login</h1>
-          <p>Dang nhap tai khoan co role admin/sales/kho.</p>
-        </header>
-        <article className="login">
+      <main className="auth-page">
+        <section className="auth-panel">
+          <div className="auth-brand">
+            <p className="eyebrow">QLKho Platform</p>
+            <h1>Sales and Inventory Hub</h1>
+            <p>Quan ly ban hang realtime, dong bo nhanh.vn, theo doi ton kho tuc thi.</p>
+          </div>
+        </section>
+        <section className="auth-card">
+          <h2>Dang nhap he thong</h2>
+          <p>Su dung tai khoan co role admin, sales hoac kho.</p>
           <label>
             Username
             <input value={username} onChange={(event) => setUsername(event.target.value)} />
@@ -145,73 +179,109 @@ export function App() {
             Password
             <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
           </label>
-          <button onClick={login}>Login</button>
+          <button className="primary-btn" onClick={login}>
+            Dang nhap
+          </button>
           {error ? <p className="error">{error}</p> : null}
-        </article>
+        </section>
       </main>
     );
   }
 
   return (
-    <main className="container">
-      <header>
-        <h1>Sales Management Realtime</h1>
-        <p>Dong bo nhanh.vn qua webhook va queue async.</p>
-        <button onClick={logout}>Logout</button>
+    <main className="dashboard">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">Realtime Operations</p>
+          <h1>Dashboard quan ly ban hang</h1>
+          <p className="muted">Dong bo nhanh.vn qua webhook va queue async.</p>
+        </div>
+        <button className="ghost-btn" onClick={logout}>
+          Dang xuat
+        </button>
       </header>
 
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <p className="error banner">{error}</p> : null}
 
-      <section className="grid metrics">
-        <article>
-          <h2>Orders Today</h2>
+      <section className="metrics-grid">
+        <article className="metric-card">
+          <p className="metric-title">Don hom nay</p>
           <strong>{metrics?.todayOrders ?? 0}</strong>
+          <span className="metric-subtitle">Xu ly trong 24 gio</span>
         </article>
-        <article>
-          <h2>Revenue Today</h2>
-          <strong>{(metrics?.todayRevenue ?? 0).toLocaleString()} VND</strong>
+        <article className="metric-card">
+          <p className="metric-title">Doanh thu hom nay</p>
+          <strong>{formatCurrency(metrics?.todayRevenue ?? 0)}</strong>
+          <span className="metric-subtitle">Tong gia tri don hang</span>
         </article>
-        <article>
-          <h2>Low Stock SKUs</h2>
+        <article className="metric-card">
+          <p className="metric-title">San pham can nhap</p>
           <strong>{metrics?.lowStockProducts ?? 0}</strong>
+          <span className="metric-subtitle">Ton kho <= 5</span>
         </article>
-        <article>
-          <h2>Pending Sync</h2>
+        <article className="metric-card">
+          <p className="metric-title">Hang doi dong bo</p>
           <strong>{metrics?.pendingSyncJobs ?? 0}</strong>
+          <span className="metric-subtitle">Queue dang cho xu ly</span>
         </article>
       </section>
 
-      <section className="grid">
-        <article>
-          <h2>Latest Orders</h2>
-          <ul>
-            {orders.map((order) => (
-              <li key={order.id}>
-                <span>{order.order_code}</span>
-                <span>{order.status}</span>
-                <span>{Number(order.total_amount).toLocaleString()} VND</span>
-              </li>
-            ))}
-          </ul>
+      <section className="content-grid">
+        <article className="panel large">
+          <div className="panel-header">
+            <h2>Don hang moi nhat</h2>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Ma don</th>
+                  <th>Khach hang</th>
+                  <th>Trang thai</th>
+                  <th>Gia tri</th>
+                  <th>Cap nhat</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.map((order) => (
+                  <tr key={order.id}>
+                    <td>{order.order_code}</td>
+                    <td>{order.customer_name || "Khach le"}</td>
+                    <td>
+                      <span className={getStatusClass(order.status)}>{order.status}</span>
+                    </td>
+                    <td>{formatCurrency(Number(order.total_amount))}</td>
+                    <td>{formatDateTime(order.updated_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </article>
 
-        <article>
-          <h2>Low Stock Products</h2>
-          <ul>
+        <article className="panel">
+          <div className="panel-header">
+            <h2>Canh bao ton kho thap</h2>
+          </div>
+          <ul className="stock-list">
             {sortedLowStock.map((item) => (
               <li key={item.id}>
-                <span>{item.sku}</span>
-                <span>{item.name}</span>
-                <span className={item.stock <= 2 ? "critical" : ""}>{item.stock}</span>
+                <div>
+                  <strong>{item.sku}</strong>
+                  <p>{item.name}</p>
+                </div>
+                <span className={item.stock <= 2 ? "badge danger" : "badge warning"}>{item.stock}</span>
               </li>
             ))}
           </ul>
         </article>
       </section>
 
-      <section>
-        <h2>Realtime Events</h2>
-        <pre>{events.join("\n") || "No events yet"}</pre>
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Su kien realtime</h2>
+        </div>
+        <pre className="event-log">{events.join("\n") || "No events yet"}</pre>
       </section>
     </main>
   );
