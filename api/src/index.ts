@@ -1,4 +1,4 @@
-import Fastify, { type FastifyRequest } from "fastify";
+import Fastify from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
 import fastifyJwt from "@fastify/jwt";
@@ -27,15 +27,6 @@ await app.register(fastifyRateLimit, {
   global: false
 });
 await app.register(websocket);
-app.addContentTypeParser("application/json", { parseAs: "string" }, (request, body, done) => {
-  try {
-    const rawBody = typeof body === "string" ? body : body.toString("utf8");
-    (request as FastifyRequest & { rawBody?: string }).rawBody = rawBody;
-    done(null, JSON.parse(rawBody));
-  } catch (error) {
-    done(error as Error);
-  }
-});
 
 const subscriber = redis.duplicate();
 await subscriber.subscribe("sales-events");
