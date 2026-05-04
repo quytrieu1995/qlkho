@@ -87,7 +87,7 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=${TRAEFIK_NETWORK:-traefik}
-      - traefik.http.routers.qlkho-web.rule=Host(`${WEB_HOST}`)
+      - traefik.http.routers.qlkho-web.rule=Host(`${WEB_HOST}`) && !PathPrefix(`/api`)
       - traefik.http.routers.qlkho-web.entrypoints=websecure
       - traefik.http.routers.qlkho-web.tls=true
       - traefik.http.services.qlkho-web.loadbalancer.server.port=80
