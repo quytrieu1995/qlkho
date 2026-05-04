@@ -167,7 +167,7 @@ export async function recordInventoryBulkTransaction(input: {
   referenceCode?: string;
   commonNote?: string;
   createdBy?: string;
-}): Promise<void> {
+}): Promise<number> {
   if (!Array.isArray(input.items) || input.items.length === 0) {
     throw new Error("items is required");
   }
@@ -175,10 +175,22 @@ export async function recordInventoryBulkTransaction(input: {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    let processedCount = 0;
     for (const item of input.items) {
-      const quantity = Math.trunc(Math.abs(item.quantity));
-      if (quantity <= 0) {
-        continue;
+      const productId = String(item.productId ?? "").trim();
+      if (!productId) {
+        throw new Error("productId is required");
+      }
+
+      // "adjust" uses target stock directly (can be 0); in/out uses positive delta quantity.
+      const rawQuantity = Number(item.quantity ?? 0);
+      const quantity = input.mode === "adjust" ? Math.trunc(rawQuantity) : Math.trunc(Math.abs(rawQuantity));
+      if (input.mode === "adjust") {
+        if (quantity < 0) {
+          throw new Error("Target stock must be greater than or equal to 0");
+        }
+      } else if (quantity <= 0) {
+        throw new Error("Quantity must be greater than 0");
       }
 
       const productResult = await client.query(
@@ -188,10 +200,10 @@ export async function recordInventoryBulkTransaction(input: {
           WHERE id = $1
           FOR UPDATE
         `,
-        [item.productId]
+        [productId]
       );
       if (productResult.rowCount === 0) {
-        throw new Error(`Product not found: ${item.productId}`);
+        throw new Error(`Product not found: ${productId}`);
       }
 
       const currentStock = Number(productResult.rows[0].stock);
@@ -208,7 +220,7 @@ export async function recordInventoryBulkTransaction(input: {
               updated_at = NOW()
           WHERE id = $1
         `,
-        [item.productId, nextStock]
+        [productId, nextStock]
       );
 
       await client.query(
@@ -217,7 +229,7 @@ export async function recordInventoryBulkTransaction(input: {
           VALUES($1, $2, $3, $4, $5, $6, $7)
         `,
         [
-          item.productId,
+          productId,
           input.mode,
           quantity,
           item.unitCost ?? 0,
@@ -226,8 +238,14 @@ export async function recordInventoryBulkTransaction(input: {
           input.createdBy ?? null
         ]
       );
+      processedCount += 1;
+    }
+
+    if (processedCount === 0) {
+      throw new Error("No valid items to process");
     }
     await client.query("COMMIT");
+    return processedCount;
   } catch (error) {
     await client.query("ROLLBACK");
     throw error;

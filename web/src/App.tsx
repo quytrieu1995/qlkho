@@ -164,7 +164,7 @@ export function App() {
     mode: "in",
     referenceCode: "",
     note: "",
-    lines: [{ productId: "", quantity: 1 }]
+    lines: [{ productId: "", quantity: 1, unitCost: 0 }]
   });
   const [inventoryAdjustForm, setInventoryAdjustForm] = useState({
     referenceCode: "",
@@ -370,14 +370,30 @@ export function App() {
       if (filteredItems.length === 0) {
         throw new Error("Cần ít nhất 1 dòng sản phẩm hợp lệ.");
       }
-      await mutateJson("/v1/inventory/bulk", token, "POST", {
-        mode: inventoryBulkForm.mode,
-        referenceCode: inventoryBulkForm.referenceCode,
-        note: inventoryBulkForm.note,
-        items: filteredItems
-      });
-      setNotice("Đã tạo phiếu nhập/xuất nhiều sản phẩm.");
-      setInventoryBulkForm({ mode: "in", referenceCode: "", note: "", lines: [{ productId: "", quantity: 1 }] });
+      const endpoint = inventoryBulkForm.mode === "in" ? "/v1/inventory/inbound" : "/v1/inventory/bulk";
+      const payload =
+        inventoryBulkForm.mode === "in"
+          ? {
+              referenceCode: inventoryBulkForm.referenceCode,
+              note: inventoryBulkForm.note,
+              items: filteredItems.map((line) => ({
+                productId: line.productId,
+                quantity: Number(line.quantity),
+                unitCost: Number(line.unitCost)
+              }))
+            }
+          : {
+              mode: "out",
+              referenceCode: inventoryBulkForm.referenceCode,
+              note: inventoryBulkForm.note,
+              items: filteredItems.map((line) => ({
+                productId: line.productId,
+                quantity: Number(line.quantity)
+              }))
+            };
+      await mutateJson(endpoint, token, "POST", payload);
+      setNotice(inventoryBulkForm.mode === "in" ? "Đã tạo phiếu nhập hàng nhiều sản phẩm." : "Đã tạo phiếu xuất kho nhiều sản phẩm.");
+      setInventoryBulkForm({ mode: "in", referenceCode: "", note: "", lines: [{ productId: "", quantity: 1, unitCost: 0 }] });
       await refresh();
     } catch (err) {
       setError(String(err));
@@ -769,9 +785,21 @@ export function App() {
                         setInventoryBulkForm((p) => ({ ...p, lines }));
                       }}
                     />
+                    {inventoryBulkForm.mode === "in" ? (
+                      <input
+                        type="number"
+                        placeholder="Đơn giá nhập"
+                        value={line.unitCost}
+                        onChange={(e) => {
+                          const lines = [...inventoryBulkForm.lines];
+                          lines[idx] = { ...lines[idx], unitCost: Number(e.target.value) };
+                          setInventoryBulkForm((p) => ({ ...p, lines }));
+                        }}
+                      />
+                    ) : null}
                   </div>
                 ))}
-                <button className="ghost-btn" onClick={() => setInventoryBulkForm((p) => ({ ...p, lines: [...p.lines, { productId: "", quantity: 1 }] }))}>+ Thêm dòng</button>
+                <button className="ghost-btn" onClick={() => setInventoryBulkForm((p) => ({ ...p, lines: [...p.lines, { productId: "", quantity: 1, unitCost: 0 }] }))}>+ Thêm dòng</button>
                 <button className="primary-btn" onClick={() => void createInventoryBulk()}>Lưu phiếu nhiều dòng</button>
               </article>
 

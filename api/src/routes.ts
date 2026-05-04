@@ -503,7 +503,26 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       unitCost?: number;
       referenceCode?: string;
       note?: string;
+      items?: Array<{ productId?: string; quantity?: number; unitCost?: number; note?: string }>;
     };
+    const hasBulkItems = Array.isArray(body.items) && body.items.length > 0;
+
+    if (hasBulkItems) {
+      const processedCount = await recordInventoryBulkTransaction({
+        mode: "in",
+        items: body.items!.map((item) => ({
+          productId: String(item.productId ?? ""),
+          quantity: Number(item.quantity ?? 0),
+          unitCost: Number(item.unitCost ?? 0),
+          note: item.note
+        })),
+        referenceCode: body.referenceCode,
+        commonNote: body.note,
+        createdBy: getRequester(request).id
+      });
+      return reply.send({ ok: true, count: processedCount });
+    }
+
     await recordInventoryTransaction({
       productId: String(body.productId ?? ""),
       quantity: Number(body.quantity ?? 0),
@@ -513,7 +532,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       type: "in",
       createdBy: getRequester(request).id
     });
-    return reply.send({ ok: true });
+    return reply.send({ ok: true, count: 1 });
   });
 
   app.post("/v1/inventory/outbound", { preHandler: [requireRoles(["admin", "kho", "sales"])] }, async (request, reply) => {
@@ -543,7 +562,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     };
     const mode = (body.mode ?? "in") as "in" | "out" | "adjust";
     const items = Array.isArray(body.items) ? body.items : [];
-    await recordInventoryBulkTransaction({
+    const processedCount = await recordInventoryBulkTransaction({
       mode,
       items: items.map((item) => ({
         productId: String(item.productId ?? ""),
@@ -555,19 +574,26 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       commonNote: body.note,
       createdBy: getRequester(request).id
     });
-    return reply.send({ ok: true, count: items.length });
+    return reply.send({ ok: true, count: processedCount });
   });
 
   app.post("/v1/inventory/adjustment", { preHandler: [requireRoles(["admin", "kho"])] }, async (request, reply) => {
     const body = request.body as {
+      productId?: string;
+      targetStock?: number;
       referenceCode?: string;
       note?: string;
       items?: Array<{ productId?: string; targetStock?: number; note?: string }>;
     };
-    const items = Array.isArray(body.items) ? body.items : [];
-    await recordInventoryBulkTransaction({
+    const bulkItems =
+      Array.isArray(body.items) && body.items.length > 0
+        ? body.items
+        : body.productId
+          ? [{ productId: body.productId, targetStock: body.targetStock, note: body.note }]
+          : [];
+    const processedCount = await recordInventoryBulkTransaction({
       mode: "adjust",
-      items: items.map((item) => ({
+      items: bulkItems.map((item) => ({
         productId: String(item.productId ?? ""),
         quantity: Number(item.targetStock ?? 0),
         note: item.note
@@ -576,7 +602,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       commonNote: body.note,
       createdBy: getRequester(request).id
     });
-    return reply.send({ ok: true, count: items.length });
+    return reply.send({ ok: true, count: processedCount });
   });
 
   app.get("/v1/inventory/transactions", { preHandler: [requireRoles(["admin", "kho", "sales"])] }, async (request) => {
