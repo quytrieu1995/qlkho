@@ -75,6 +75,7 @@ type CurrentUser = {
 };
 
 type ModuleId = "dashboard" | "products" | "customers" | "inventory" | "orders" | "shipping" | "users";
+type ModalId = "product" | "customer" | "inventorySingle" | "inventoryBulk" | "inventoryAdjust" | "order" | "shipping" | "user";
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:4000";
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL ?? "ws://localhost:4000";
@@ -133,6 +134,7 @@ async function mutateJson<T>(path: string, token: string, method: string, body: 
 export function App() {
   const [token, setToken] = useState<string>(() => localStorage.getItem("qlkho_token") ?? "");
   const [activeModule, setActiveModule] = useState<ModuleId>("dashboard");
+  const [activeModal, setActiveModal] = useState<ModalId | null>(null);
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -256,6 +258,17 @@ export function App() {
     return () => ws.close();
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  useEffect(() => {
+    if (!activeModal) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setActiveModal(null);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [activeModal]);
+
   const login = async () => {
     try {
       const response = await fetch(`${API_BASE}/v1/auth/login`, {
@@ -300,6 +313,7 @@ export function App() {
       }
       setEditingProductId("");
       setProductForm({ sku: "", name: "", category: "", unitPrice: 0, stock: 0 });
+      setActiveModal(null);
       await refresh();
     } catch (err) {
       setError(String(err));
@@ -315,6 +329,7 @@ export function App() {
       unitPrice: Number(item.unit_price),
       stock: Number(item.stock)
     });
+    setActiveModal("product");
   };
 
   const upsertCustomer = async () => {
@@ -329,6 +344,7 @@ export function App() {
       }
       setEditingCustomerId("");
       setCustomerForm({ fullName: "", phone: "", email: "", address: "" });
+      setActiveModal(null);
       await refresh();
     } catch (err) {
       setError(String(err));
@@ -343,6 +359,7 @@ export function App() {
       email: item.email ?? "",
       address: item.address ?? ""
     });
+    setActiveModal("customer");
   };
 
   const createInventoryTx = async () => {
@@ -357,6 +374,7 @@ export function App() {
       });
       setNotice("Đã ghi nhận giao dịch kho lẻ.");
       setInventoryForm({ mode: "inbound", productId: "", quantity: 1, referenceCode: "", note: "" });
+      setActiveModal(null);
       await refresh();
     } catch (err) {
       setError(String(err));
@@ -394,6 +412,7 @@ export function App() {
       await mutateJson(endpoint, token, "POST", payload);
       setNotice(inventoryBulkForm.mode === "in" ? "Đã tạo phiếu nhập hàng nhiều sản phẩm." : "Đã tạo phiếu xuất kho nhiều sản phẩm.");
       setInventoryBulkForm({ mode: "in", referenceCode: "", note: "", lines: [{ productId: "", quantity: 1, unitCost: 0 }] });
+      setActiveModal(null);
       await refresh();
     } catch (err) {
       setError(String(err));
@@ -414,6 +433,7 @@ export function App() {
       });
       setNotice("Đã điều chỉnh tồn kho theo số lượng mục tiêu.");
       setInventoryAdjustForm({ referenceCode: "", note: "", lines: [{ productId: "", targetStock: 0 }] });
+      setActiveModal(null);
       await refresh();
     } catch (err) {
       setError(String(err));
@@ -436,6 +456,7 @@ export function App() {
       await mutateJson("/v1/orders", token, "POST", payload);
       setNotice("Đã tạo đơn hàng mới.");
       setOrderForm({ customerId: "", source: "local", status: "new", lines: [{ productId: "", quantity: 1, unitPrice: 0 }] });
+      setActiveModal(null);
       await refresh();
     } catch (err) {
       setError(String(err));
@@ -470,6 +491,7 @@ export function App() {
         codAmount: 0,
         note: ""
       });
+      setActiveModal(null);
       await refresh();
     } catch (err) {
       setError(String(err));
@@ -493,6 +515,7 @@ export function App() {
       await mutateJson("/v1/users", token, "POST", userForm);
       setNotice("Đã tạo người dùng.");
       setUserForm({ username: "", password: "", role: "sales" });
+      setActiveModal(null);
       await refresh();
     } catch (err) {
       setError(String(err));
@@ -629,84 +652,91 @@ export function App() {
         )}
 
         {activeModule === "products" && (
-          <section className="page-grid">
-            <article className="card wide">
-              <header className="card-head"><h2>Danh sách sản phẩm</h2></header>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr><th>SKU</th><th>Tên</th><th>Danh mục</th><th>Đơn giá</th><th>Tồn</th><th>Thao tác</th></tr>
-                  </thead>
-                  <tbody>
-                    {products.map((item) => (
-                      <tr key={item.id}>
-                        <td>{item.sku}</td>
-                        <td>{item.name}</td>
-                        <td>{item.category}</td>
-                        <td>{formatCurrency(Number(item.unit_price))}</td>
-                        <td>{item.stock}</td>
-                        <td><button className="ghost-btn" onClick={() => editProduct(item)}>Sửa</button></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </article>
-            <article className="card">
-              <header className="card-head"><h2>{editingProductId ? "Cập nhật sản phẩm" : "Thêm sản phẩm"}</h2></header>
+          <section className="card">
+            <header className="card-head card-head-row">
+              <h2>Danh sách sản phẩm</h2>
               {canManageCatalog ? (
-                <>
-                  <input placeholder="SKU" value={productForm.sku} onChange={(e) => setProductForm((p) => ({ ...p, sku: e.target.value }))} />
-                  <input placeholder="Tên sản phẩm" value={productForm.name} onChange={(e) => setProductForm((p) => ({ ...p, name: e.target.value }))} />
-                  <input placeholder="Danh mục" value={productForm.category} onChange={(e) => setProductForm((p) => ({ ...p, category: e.target.value }))} />
-                  <input type="number" placeholder="Đơn giá" value={productForm.unitPrice} onChange={(e) => setProductForm((p) => ({ ...p, unitPrice: Number(e.target.value) }))} />
-                  <input type="number" placeholder="Tồn kho" value={productForm.stock} onChange={(e) => setProductForm((p) => ({ ...p, stock: Number(e.target.value) }))} />
-                  <button className="primary-btn" onClick={() => void upsertProduct()}>{editingProductId ? "Lưu cập nhật" : "Lưu sản phẩm"}</button>
-                </>
-              ) : (
-                <p className="text-muted">Bạn không có quyền thao tác sản phẩm.</p>
-              )}
-            </article>
+                <button
+                  className="primary-btn"
+                  onClick={() => {
+                    setEditingProductId("");
+                    setProductForm({ sku: "", name: "", category: "", unitPrice: 0, stock: 0 });
+                    setActiveModal("product");
+                  }}
+                >
+                  + Thêm sản phẩm
+                </button>
+              ) : null}
+            </header>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>SKU</th><th>Tên</th><th>Danh mục</th><th>Đơn giá</th><th>Tồn</th><th>Thao tác</th></tr>
+                </thead>
+                <tbody>
+                  {products.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.sku}</td>
+                      <td>{item.name}</td>
+                      <td>{item.category}</td>
+                      <td>{formatCurrency(Number(item.unit_price))}</td>
+                      <td>{item.stock}</td>
+                      <td>
+                        {canManageCatalog ? (
+                          <button className="ghost-btn" onClick={() => editProduct(item)}>Sửa</button>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </section>
         )}
 
         {activeModule === "customers" && (
-          <section className="page-grid">
-            <article className="card wide">
-              <header className="card-head"><h2>Danh sách khách hàng</h2></header>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr><th>Họ tên</th><th>Điện thoại</th><th>Email</th><th>Địa chỉ</th><th>Thao tác</th></tr>
-                  </thead>
-                  <tbody>
-                    {customers.map((item) => (
-                      <tr key={item.id}>
-                        <td>{item.full_name}</td>
-                        <td>{item.phone}</td>
-                        <td>{item.email}</td>
-                        <td>{item.address}</td>
-                        <td><button className="ghost-btn" onClick={() => editCustomer(item)}>Sửa</button></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </article>
-            <article className="card">
-              <header className="card-head"><h2>{editingCustomerId ? "Cập nhật khách hàng" : "Thêm khách hàng"}</h2></header>
+          <section className="card">
+            <header className="card-head card-head-row">
+              <h2>Danh sách khách hàng</h2>
               {canManageCustomers ? (
-                <>
-                  <input placeholder="Họ tên" value={customerForm.fullName} onChange={(e) => setCustomerForm((p) => ({ ...p, fullName: e.target.value }))} />
-                  <input placeholder="Số điện thoại" value={customerForm.phone} onChange={(e) => setCustomerForm((p) => ({ ...p, phone: e.target.value }))} />
-                  <input placeholder="Email" value={customerForm.email} onChange={(e) => setCustomerForm((p) => ({ ...p, email: e.target.value }))} />
-                  <input placeholder="Địa chỉ" value={customerForm.address} onChange={(e) => setCustomerForm((p) => ({ ...p, address: e.target.value }))} />
-                  <button className="primary-btn" onClick={() => void upsertCustomer()}>{editingCustomerId ? "Lưu cập nhật" : "Lưu khách hàng"}</button>
-                </>
-              ) : (
-                <p className="text-muted">Bạn không có quyền thao tác khách hàng.</p>
-              )}
-            </article>
+                <button
+                  className="primary-btn"
+                  onClick={() => {
+                    setEditingCustomerId("");
+                    setCustomerForm({ fullName: "", phone: "", email: "", address: "" });
+                    setActiveModal("customer");
+                  }}
+                >
+                  + Thêm khách hàng
+                </button>
+              ) : null}
+            </header>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Họ tên</th><th>Điện thoại</th><th>Email</th><th>Địa chỉ</th><th>Thao tác</th></tr>
+                </thead>
+                <tbody>
+                  {customers.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.full_name}</td>
+                      <td>{item.phone}</td>
+                      <td>{item.email}</td>
+                      <td>{item.address}</td>
+                      <td>
+                        {canManageCustomers ? (
+                          <button className="ghost-btn" onClick={() => editCustomer(item)}>Sửa</button>
+                        ) : (
+                          "-"
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </section>
         )}
 
@@ -715,12 +745,12 @@ export function App() {
             <section className="page-grid">
               <article className="card wide">
                 <header className="card-head"><h2>Lịch sử nhập xuất kho</h2></header>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
+              <div className="table-wrap">
+                <table>
+                  <thead>
                       <tr><th>Loại</th><th>SKU</th><th>Sản phẩm</th><th>Số lượng</th><th>Mã tham chiếu</th><th>Thời gian</th></tr>
-                    </thead>
-                    <tbody>
+                  </thead>
+                  <tbody>
                       {inventoryTx.map((item) => (
                         <tr key={item.id}>
                           <td><span className={statusClass(item.type)}>{item.type}</span></td>
@@ -731,172 +761,215 @@ export function App() {
                           <td>{formatDate(item.created_at)}</td>
                         </tr>
                       ))}
-                    </tbody>
-                  </table>
+                  </tbody>
+                </table>
+              </div>
+            </article>
+            <article className="card">
+                <header className="card-head"><h2>Thao tác kho</h2></header>
+                <div className="action-stack">
+                  <button className="primary-btn" onClick={() => setActiveModal("inventorySingle")}>Nhập/Xuất kho lẻ</button>
+                  <button className="primary-btn" onClick={() => setActiveModal("inventoryBulk")}>Nhập/Xuất nhiều sản phẩm</button>
+                  <button className="primary-btn" onClick={() => setActiveModal("inventoryAdjust")}>Điều chỉnh tồn nhiều sản phẩm</button>
                 </div>
-              </article>
-              <article className="card">
-                <header className="card-head"><h2>Tạo giao dịch kho lẻ</h2></header>
-                <select value={inventoryForm.mode} onChange={(e) => setInventoryForm((p) => ({ ...p, mode: e.target.value }))}>
-                  <option value="inbound">Nhập kho</option>
-                  <option value="outbound">Xuất kho</option>
-                </select>
-                <select value={inventoryForm.productId} onChange={(e) => setInventoryForm((p) => ({ ...p, productId: e.target.value }))}>
-                  <option value="">Chọn sản phẩm</option>
-                  {products.map((item) => (
-                    <option key={item.id} value={item.id}>{item.sku} - {item.name}</option>
-                  ))}
-                </select>
-                <input type="number" value={inventoryForm.quantity} onChange={(e) => setInventoryForm((p) => ({ ...p, quantity: Number(e.target.value) }))} placeholder="Số lượng" />
-                <input value={inventoryForm.referenceCode} onChange={(e) => setInventoryForm((p) => ({ ...p, referenceCode: e.target.value }))} placeholder="Mã tham chiếu" />
-                <input value={inventoryForm.note} onChange={(e) => setInventoryForm((p) => ({ ...p, note: e.target.value }))} placeholder="Ghi chú" />
-                <button className="primary-btn" onClick={() => void createInventoryTx()}>Lưu giao dịch</button>
-              </article>
-            </section>
-
-            <section className="page-grid">
-              <article className="card wide">
-                <header className="card-head"><h2>Tạo phiếu nhập/xuất nhiều sản phẩm</h2></header>
-                <select value={inventoryBulkForm.mode} onChange={(e) => setInventoryBulkForm((p) => ({ ...p, mode: e.target.value }))}>
-                  <option value="in">Nhập kho nhiều dòng</option>
-                  <option value="out">Xuất kho nhiều dòng</option>
-                </select>
-                <input placeholder="Mã phiếu" value={inventoryBulkForm.referenceCode} onChange={(e) => setInventoryBulkForm((p) => ({ ...p, referenceCode: e.target.value }))} />
-                <input placeholder="Ghi chú" value={inventoryBulkForm.note} onChange={(e) => setInventoryBulkForm((p) => ({ ...p, note: e.target.value }))} />
-                {inventoryBulkForm.lines.map((line, idx) => (
-                  <div key={`bulk-${idx}`}>
-                    <select value={line.productId} onChange={(e) => {
-                      const lines = [...inventoryBulkForm.lines];
-                      lines[idx] = { ...lines[idx], productId: e.target.value };
-                      setInventoryBulkForm((p) => ({ ...p, lines }));
-                    }}>
-                      <option value="">Chọn sản phẩm</option>
-                      {products.map((item) => (
-                        <option key={item.id} value={item.id}>{item.sku} - {item.name}</option>
-                      ))}
-                    </select>
-                    <input
-                      type="number"
-                      placeholder="Số lượng"
-                      value={line.quantity}
-                      onChange={(e) => {
-                        const lines = [...inventoryBulkForm.lines];
-                        lines[idx] = { ...lines[idx], quantity: Number(e.target.value) };
-                        setInventoryBulkForm((p) => ({ ...p, lines }));
-                      }}
-                    />
-                    {inventoryBulkForm.mode === "in" ? (
-                      <input
-                        type="number"
-                        placeholder="Đơn giá nhập"
-                        value={line.unitCost}
-                        onChange={(e) => {
-                          const lines = [...inventoryBulkForm.lines];
-                          lines[idx] = { ...lines[idx], unitCost: Number(e.target.value) };
-                          setInventoryBulkForm((p) => ({ ...p, lines }));
-                        }}
-                      />
-                    ) : null}
-                  </div>
-                ))}
-                <button className="ghost-btn" onClick={() => setInventoryBulkForm((p) => ({ ...p, lines: [...p.lines, { productId: "", quantity: 1, unitCost: 0 }] }))}>+ Thêm dòng</button>
-                <button className="primary-btn" onClick={() => void createInventoryBulk()}>Lưu phiếu nhiều dòng</button>
-              </article>
-
-              <article className="card">
-                <header className="card-head"><h2>Điều chỉnh tồn kho</h2></header>
-                <input placeholder="Mã kiểm kê" value={inventoryAdjustForm.referenceCode} onChange={(e) => setInventoryAdjustForm((p) => ({ ...p, referenceCode: e.target.value }))} />
-                <input placeholder="Ghi chú điều chỉnh" value={inventoryAdjustForm.note} onChange={(e) => setInventoryAdjustForm((p) => ({ ...p, note: e.target.value }))} />
-                {inventoryAdjustForm.lines.map((line, idx) => (
-                  <div key={`adjust-${idx}`}>
-                    <select value={line.productId} onChange={(e) => {
-                      const lines = [...inventoryAdjustForm.lines];
-                      lines[idx] = { ...lines[idx], productId: e.target.value };
-                      setInventoryAdjustForm((p) => ({ ...p, lines }));
-                    }}>
-                      <option value="">Chọn sản phẩm</option>
-                      {products.map((item) => (
-                        <option key={item.id} value={item.id}>{item.sku} - {item.name}</option>
-                      ))}
-                    </select>
-                    <input
-                      type="number"
-                      placeholder="Tồn mục tiêu"
-                      value={line.targetStock}
-                      onChange={(e) => {
-                        const lines = [...inventoryAdjustForm.lines];
-                        lines[idx] = { ...lines[idx], targetStock: Number(e.target.value) };
-                        setInventoryAdjustForm((p) => ({ ...p, lines }));
-                      }}
-                    />
-                  </div>
-                ))}
-                <button className="ghost-btn" onClick={() => setInventoryAdjustForm((p) => ({ ...p, lines: [...p.lines, { productId: "", targetStock: 0 }] }))}>+ Thêm dòng</button>
-                <button className="primary-btn" onClick={() => void createInventoryAdjust()}>Xác nhận điều chỉnh</button>
               </article>
             </section>
           </>
         )}
 
         {activeModule === "orders" && (
-          <section className="page-grid">
-            <article className="card wide">
-              <header className="card-head"><h2>Danh sách đơn hàng</h2></header>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr><th>Mã đơn</th><th>Khách hàng</th><th>Kênh</th><th>Tổng tiền</th><th>Trạng thái</th><th>Đổi trạng thái</th></tr>
-                  </thead>
-                  <tbody>
-                    {orders.map((item) => (
-                      <tr key={item.id}>
-                        <td>{item.order_code}</td>
-                        <td>{item.customer_name || "Khách lẻ"}</td>
-                        <td>{item.source}</td>
-                        <td>{formatCurrency(Number(item.total_amount))}</td>
-                        <td><span className={statusClass(item.status)}>{item.status}</span></td>
-                        <td>
-                          <select defaultValue="" onChange={(e) => {
-                            const nextStatus = e.target.value;
-                            if (nextStatus) void updateOrderStatus(item.id, nextStatus);
-                          }}>
-                            <option value="">Chọn trạng thái</option>
-                            <option value="new">new</option>
-                            <option value="confirmed">confirmed</option>
-                            <option value="shipping">shipping</option>
-                            <option value="done">done</option>
-                            <option value="cancelled">cancelled</option>
-                          </select>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </article>
-            <article className="card">
-              <header className="card-head"><h2>Tạo đơn hàng mới</h2></header>
+          <section className="card">
+            <header className="card-head card-head-row">
+              <h2>Danh sách đơn hàng</h2>
               {canManageOrders ? (
+                <button className="primary-btn" onClick={() => setActiveModal("order")}>+ Tạo đơn hàng</button>
+              ) : null}
+            </header>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Mã đơn</th><th>Khách hàng</th><th>Kênh</th><th>Tổng tiền</th><th>Trạng thái</th><th>Đổi trạng thái</th></tr>
+                </thead>
+                <tbody>
+                  {orders.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.order_code}</td>
+                      <td>{item.customer_name || "Khách lẻ"}</td>
+                      <td>{item.source}</td>
+                      <td>{formatCurrency(Number(item.total_amount))}</td>
+                      <td><span className={statusClass(item.status)}>{item.status}</span></td>
+                      <td>
+                        <select defaultValue="" onChange={(e) => {
+                          const nextStatus = e.target.value;
+                          if (nextStatus) void updateOrderStatus(item.id, nextStatus);
+                        }}>
+                          <option value="">Chọn trạng thái</option>
+                          <option value="new">new</option>
+                          <option value="confirmed">confirmed</option>
+                          <option value="shipping">shipping</option>
+                          <option value="done">done</option>
+                          <option value="cancelled">cancelled</option>
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {activeModule === "shipping" && (
+          <section className="card">
+            <header className="card-head card-head-row">
+              <h2>Danh sách vận chuyển</h2>
+              {canManageShipping ? (
+                <button className="primary-btn" onClick={() => setActiveModal("shipping")}>+ Tạo vận đơn</button>
+              ) : null}
+            </header>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Mã vận đơn</th><th>Đơn hàng</th><th>Khách nhận</th><th>Đơn vị</th><th>Phí ship</th><th>Trạng thái</th><th>Đổi trạng thái</th></tr>
+                </thead>
+                <tbody>
+                  {shippings.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.shipping_code}</td>
+                      <td>{item.order_code || "-"}</td>
+                      <td>{item.recipient_name}</td>
+                      <td>{item.carrier}</td>
+                      <td>{formatCurrency(Number(item.shipping_fee))}</td>
+                      <td><span className={statusClass(item.status)}>{item.status}</span></td>
+                      <td>
+                        <select defaultValue="" onChange={(e) => {
+                          const nextStatus = e.target.value;
+                          if (nextStatus) void updateShippingStatus(item.id, nextStatus);
+                        }}>
+                          <option value="">Chọn trạng thái</option>
+                          <option value="pending">pending</option>
+                          <option value="packed">packed</option>
+                          <option value="shipped">shipped</option>
+                          <option value="delivered">delivered</option>
+                          <option value="returned">returned</option>
+                          <option value="cancelled">cancelled</option>
+                        </select>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {activeModule === "users" && (
+          <section className="card">
+            <header className="card-head card-head-row">
+              <h2>Danh sách người dùng</h2>
+              {canManageUsers ? (
+                <button className="primary-btn" onClick={() => setActiveModal("user")}>+ Tạo người dùng</button>
+              ) : null}
+            </header>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Tên đăng nhập</th><th>Vai trò</th><th>Trạng thái</th><th>Thao tác</th></tr>
+                </thead>
+                <tbody>
+                  {users.map((item) => (
+                    <tr key={item.id}>
+                      <td>{item.username}</td>
+                      <td>{item.role}</td>
+                      <td>{item.is_active ? "Hoạt động" : "Khóa"}</td>
+                      <td><button className="ghost-btn" onClick={() => void toggleUser(item)}>{item.is_active ? "Khóa" : "Mở khóa"}</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        )}
+
+        {activeModal ? (
+          <div className="modal-overlay" onClick={() => setActiveModal(null)}>
+            <div className="modal-card" onClick={(event) => event.stopPropagation()}>
+              <header className="card-head card-head-row">
+                <h2>
+                  {activeModal === "product" && (editingProductId ? "Cập nhật sản phẩm" : "Thêm sản phẩm")}
+                  {activeModal === "customer" && (editingCustomerId ? "Cập nhật khách hàng" : "Thêm khách hàng")}
+                  {activeModal === "inventorySingle" && "Tạo giao dịch kho lẻ"}
+                  {activeModal === "inventoryBulk" && "Tạo phiếu nhập/xuất nhiều sản phẩm"}
+                  {activeModal === "inventoryAdjust" && "Điều chỉnh tồn kho"}
+                  {activeModal === "order" && "Tạo đơn hàng mới"}
+                  {activeModal === "shipping" && "Tạo vận đơn mới"}
+                  {activeModal === "user" && "Tạo người dùng"}
+                </h2>
+                <button className="ghost-btn" onClick={() => setActiveModal(null)}>Đóng</button>
+              </header>
+
+              {activeModal === "product" ? (
+                canManageCatalog ? (
+                  <>
+                    <input placeholder="SKU" value={productForm.sku} onChange={(e) => setProductForm((p) => ({ ...p, sku: e.target.value }))} />
+                    <input placeholder="Tên sản phẩm" value={productForm.name} onChange={(e) => setProductForm((p) => ({ ...p, name: e.target.value }))} />
+                    <input placeholder="Danh mục" value={productForm.category} onChange={(e) => setProductForm((p) => ({ ...p, category: e.target.value }))} />
+                    <input type="number" placeholder="Đơn giá" value={productForm.unitPrice} onChange={(e) => setProductForm((p) => ({ ...p, unitPrice: Number(e.target.value) }))} />
+                    <input type="number" placeholder="Tồn kho" value={productForm.stock} onChange={(e) => setProductForm((p) => ({ ...p, stock: Number(e.target.value) }))} />
+                    <button className="primary-btn" onClick={() => void upsertProduct()}>{editingProductId ? "Lưu cập nhật" : "Lưu sản phẩm"}</button>
+                  </>
+                ) : (
+                  <p className="text-muted">Bạn không có quyền thao tác sản phẩm.</p>
+                )
+              ) : null}
+
+              {activeModal === "customer" ? (
+                canManageCustomers ? (
+                  <>
+                    <input placeholder="Họ tên" value={customerForm.fullName} onChange={(e) => setCustomerForm((p) => ({ ...p, fullName: e.target.value }))} />
+                    <input placeholder="Số điện thoại" value={customerForm.phone} onChange={(e) => setCustomerForm((p) => ({ ...p, phone: e.target.value }))} />
+                    <input placeholder="Email" value={customerForm.email} onChange={(e) => setCustomerForm((p) => ({ ...p, email: e.target.value }))} />
+                    <input placeholder="Địa chỉ" value={customerForm.address} onChange={(e) => setCustomerForm((p) => ({ ...p, address: e.target.value }))} />
+                    <button className="primary-btn" onClick={() => void upsertCustomer()}>{editingCustomerId ? "Lưu cập nhật" : "Lưu khách hàng"}</button>
+                  </>
+                ) : (
+                  <p className="text-muted">Bạn không có quyền thao tác khách hàng.</p>
+                )
+              ) : null}
+
+              {activeModal === "inventorySingle" ? (
                 <>
-                  <select value={orderForm.customerId} onChange={(e) => setOrderForm((p) => ({ ...p, customerId: e.target.value }))}>
-                    <option value="">Khách lẻ</option>
-                    {customers.map((item) => (
-                      <option key={item.id} value={item.id}>{item.full_name} - {item.phone}</option>
+                  <select value={inventoryForm.mode} onChange={(e) => setInventoryForm((p) => ({ ...p, mode: e.target.value }))}>
+                    <option value="inbound">Nhập kho</option>
+                    <option value="outbound">Xuất kho</option>
+                  </select>
+                  <select value={inventoryForm.productId} onChange={(e) => setInventoryForm((p) => ({ ...p, productId: e.target.value }))}>
+                    <option value="">Chọn sản phẩm</option>
+                    {products.map((item) => (
+                      <option key={item.id} value={item.id}>{item.sku} - {item.name}</option>
                     ))}
                   </select>
-                  <input placeholder="Kênh bán (website, cửa hàng...)" value={orderForm.source} onChange={(e) => setOrderForm((p) => ({ ...p, source: e.target.value }))} />
-                  <input placeholder="Trạng thái ban đầu" value={orderForm.status} onChange={(e) => setOrderForm((p) => ({ ...p, status: e.target.value }))} />
-                  {orderForm.lines.map((line, idx) => (
-                    <div key={`order-line-${idx}`}>
+                  <input type="number" value={inventoryForm.quantity} onChange={(e) => setInventoryForm((p) => ({ ...p, quantity: Number(e.target.value) }))} placeholder="Số lượng" />
+                  <input value={inventoryForm.referenceCode} onChange={(e) => setInventoryForm((p) => ({ ...p, referenceCode: e.target.value }))} placeholder="Mã tham chiếu" />
+                  <input value={inventoryForm.note} onChange={(e) => setInventoryForm((p) => ({ ...p, note: e.target.value }))} placeholder="Ghi chú" />
+                  <button className="primary-btn" onClick={() => void createInventoryTx()}>Lưu giao dịch</button>
+                </>
+              ) : null}
+
+              {activeModal === "inventoryBulk" ? (
+                <>
+                  <select value={inventoryBulkForm.mode} onChange={(e) => setInventoryBulkForm((p) => ({ ...p, mode: e.target.value }))}>
+                    <option value="in">Nhập kho nhiều dòng</option>
+                    <option value="out">Xuất kho nhiều dòng</option>
+                  </select>
+                  <input placeholder="Mã phiếu" value={inventoryBulkForm.referenceCode} onChange={(e) => setInventoryBulkForm((p) => ({ ...p, referenceCode: e.target.value }))} />
+                  <input placeholder="Ghi chú" value={inventoryBulkForm.note} onChange={(e) => setInventoryBulkForm((p) => ({ ...p, note: e.target.value }))} />
+                  {inventoryBulkForm.lines.map((line, idx) => (
+                    <div key={`bulk-${idx}`}>
                       <select value={line.productId} onChange={(e) => {
-                        const lines = [...orderForm.lines];
-                        const selected = products.find((item) => item.id === e.target.value);
-                        lines[idx] = {
-                          ...lines[idx],
-                          productId: e.target.value,
-                          unitPrice: selected ? Number(selected.unit_price) : lines[idx].unitPrice
-                        };
-                        setOrderForm((p) => ({ ...p, lines }));
+                        const lines = [...inventoryBulkForm.lines];
+                        lines[idx] = { ...lines[idx], productId: e.target.value };
+                        setInventoryBulkForm((p) => ({ ...p, lines }));
                       }}>
                         <option value="">Chọn sản phẩm</option>
                         {products.map((item) => (
@@ -908,140 +981,165 @@ export function App() {
                         placeholder="Số lượng"
                         value={line.quantity}
                         onChange={(e) => {
-                          const lines = [...orderForm.lines];
+                          const lines = [...inventoryBulkForm.lines];
                           lines[idx] = { ...lines[idx], quantity: Number(e.target.value) };
-                          setOrderForm((p) => ({ ...p, lines }));
+                          setInventoryBulkForm((p) => ({ ...p, lines }));
                         }}
                       />
+                      {inventoryBulkForm.mode === "in" ? (
+                        <input
+                          type="number"
+                          placeholder="Đơn giá nhập"
+                          value={line.unitCost}
+                          onChange={(e) => {
+                            const lines = [...inventoryBulkForm.lines];
+                            lines[idx] = { ...lines[idx], unitCost: Number(e.target.value) };
+                            setInventoryBulkForm((p) => ({ ...p, lines }));
+                          }}
+                        />
+                      ) : null}
+                    </div>
+                  ))}
+                  <button className="ghost-btn" onClick={() => setInventoryBulkForm((p) => ({ ...p, lines: [...p.lines, { productId: "", quantity: 1, unitCost: 0 }] }))}>+ Thêm dòng</button>
+                  <button className="primary-btn" onClick={() => void createInventoryBulk()}>Lưu phiếu nhiều dòng</button>
+                </>
+              ) : null}
+
+              {activeModal === "inventoryAdjust" ? (
+                <>
+                  <input placeholder="Mã kiểm kê" value={inventoryAdjustForm.referenceCode} onChange={(e) => setInventoryAdjustForm((p) => ({ ...p, referenceCode: e.target.value }))} />
+                  <input placeholder="Ghi chú điều chỉnh" value={inventoryAdjustForm.note} onChange={(e) => setInventoryAdjustForm((p) => ({ ...p, note: e.target.value }))} />
+                  {inventoryAdjustForm.lines.map((line, idx) => (
+                    <div key={`adjust-${idx}`}>
+                      <select value={line.productId} onChange={(e) => {
+                        const lines = [...inventoryAdjustForm.lines];
+                        lines[idx] = { ...lines[idx], productId: e.target.value };
+                        setInventoryAdjustForm((p) => ({ ...p, lines }));
+                      }}>
+                        <option value="">Chọn sản phẩm</option>
+                        {products.map((item) => (
+                          <option key={item.id} value={item.id}>{item.sku} - {item.name}</option>
+                        ))}
+                      </select>
                       <input
                         type="number"
-                        placeholder="Đơn giá"
-                        value={line.unitPrice}
+                        placeholder="Tồn mục tiêu"
+                        value={line.targetStock}
                         onChange={(e) => {
-                          const lines = [...orderForm.lines];
-                          lines[idx] = { ...lines[idx], unitPrice: Number(e.target.value) };
-                          setOrderForm((p) => ({ ...p, lines }));
+                          const lines = [...inventoryAdjustForm.lines];
+                          lines[idx] = { ...lines[idx], targetStock: Number(e.target.value) };
+                          setInventoryAdjustForm((p) => ({ ...p, lines }));
                         }}
                       />
                     </div>
                   ))}
-                  <button className="ghost-btn" onClick={() => setOrderForm((p) => ({ ...p, lines: [...p.lines, { productId: "", quantity: 1, unitPrice: 0 }] }))}>+ Thêm sản phẩm</button>
-                  <button className="primary-btn" onClick={() => void createOrder()}>Lưu đơn hàng</button>
+                  <button className="ghost-btn" onClick={() => setInventoryAdjustForm((p) => ({ ...p, lines: [...p.lines, { productId: "", targetStock: 0 }] }))}>+ Thêm dòng</button>
+                  <button className="primary-btn" onClick={() => void createInventoryAdjust()}>Xác nhận điều chỉnh</button>
                 </>
-              ) : (
-                <p className="text-muted">Bạn không có quyền tạo đơn hàng.</p>
-              )}
-            </article>
-          </section>
-        )}
+              ) : null}
 
-        {activeModule === "shipping" && (
-          <section className="page-grid">
-            <article className="card wide">
-              <header className="card-head"><h2>Danh sách vận chuyển</h2></header>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr><th>Mã vận đơn</th><th>Đơn hàng</th><th>Khách nhận</th><th>Đơn vị</th><th>Phí ship</th><th>Trạng thái</th><th>Đổi trạng thái</th></tr>
-                  </thead>
-                  <tbody>
-                    {shippings.map((item) => (
-                      <tr key={item.id}>
-                        <td>{item.shipping_code}</td>
-                        <td>{item.order_code || "-"}</td>
-                        <td>{item.recipient_name}</td>
-                        <td>{item.carrier}</td>
-                        <td>{formatCurrency(Number(item.shipping_fee))}</td>
-                        <td><span className={statusClass(item.status)}>{item.status}</span></td>
-                        <td>
-                          <select defaultValue="" onChange={(e) => {
-                            const nextStatus = e.target.value;
-                            if (nextStatus) void updateShippingStatus(item.id, nextStatus);
-                          }}>
-                            <option value="">Chọn trạng thái</option>
-                            <option value="pending">pending</option>
-                            <option value="packed">packed</option>
-                            <option value="shipped">shipped</option>
-                            <option value="delivered">delivered</option>
-                            <option value="returned">returned</option>
-                            <option value="cancelled">cancelled</option>
-                          </select>
-                        </td>
-                      </tr>
+              {activeModal === "order" ? (
+                canManageOrders ? (
+                  <>
+                    <select value={orderForm.customerId} onChange={(e) => setOrderForm((p) => ({ ...p, customerId: e.target.value }))}>
+                      <option value="">Khách lẻ</option>
+                      {customers.map((item) => (
+                        <option key={item.id} value={item.id}>{item.full_name} - {item.phone}</option>
+                      ))}
+                    </select>
+                    <input placeholder="Kênh bán (website, cửa hàng...)" value={orderForm.source} onChange={(e) => setOrderForm((p) => ({ ...p, source: e.target.value }))} />
+                    <input placeholder="Trạng thái ban đầu" value={orderForm.status} onChange={(e) => setOrderForm((p) => ({ ...p, status: e.target.value }))} />
+                    {orderForm.lines.map((line, idx) => (
+                      <div key={`order-line-${idx}`}>
+                        <select value={line.productId} onChange={(e) => {
+                          const lines = [...orderForm.lines];
+                          const selected = products.find((item) => item.id === e.target.value);
+                          lines[idx] = {
+                            ...lines[idx],
+                            productId: e.target.value,
+                            unitPrice: selected ? Number(selected.unit_price) : lines[idx].unitPrice
+                          };
+                          setOrderForm((p) => ({ ...p, lines }));
+                        }}>
+                          <option value="">Chọn sản phẩm</option>
+                          {products.map((item) => (
+                            <option key={item.id} value={item.id}>{item.sku} - {item.name}</option>
+                          ))}
+                        </select>
+                        <input
+                          type="number"
+                          placeholder="Số lượng"
+                          value={line.quantity}
+                          onChange={(e) => {
+                            const lines = [...orderForm.lines];
+                            lines[idx] = { ...lines[idx], quantity: Number(e.target.value) };
+                            setOrderForm((p) => ({ ...p, lines }));
+                          }}
+                        />
+                        <input
+                          type="number"
+                          placeholder="Đơn giá"
+                          value={line.unitPrice}
+                          onChange={(e) => {
+                            const lines = [...orderForm.lines];
+                            lines[idx] = { ...lines[idx], unitPrice: Number(e.target.value) };
+                            setOrderForm((p) => ({ ...p, lines }));
+                          }}
+                        />
+                      </div>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            </article>
-            <article className="card">
-              <header className="card-head"><h2>Tạo vận đơn mới</h2></header>
-              {canManageShipping ? (
-                <>
-                  <select value={shippingForm.orderId} onChange={(e) => setShippingForm((p) => ({ ...p, orderId: e.target.value }))}>
-                    <option value="">Không gắn đơn cụ thể</option>
-                    {orders.map((item) => (
-                      <option key={item.id} value={item.id}>{item.order_code}</option>
-                    ))}
-                  </select>
-                  <input placeholder="Mã vận đơn (để trống sẽ tự sinh)" value={shippingForm.shippingCode} onChange={(e) => setShippingForm((p) => ({ ...p, shippingCode: e.target.value }))} />
-                  <input placeholder="Đơn vị vận chuyển" value={shippingForm.carrier} onChange={(e) => setShippingForm((p) => ({ ...p, carrier: e.target.value }))} />
-                  <input placeholder="Dịch vụ (nhanh/tiết kiệm...)" value={shippingForm.serviceLevel} onChange={(e) => setShippingForm((p) => ({ ...p, serviceLevel: e.target.value }))} />
-                  <input placeholder="Tên người nhận" value={shippingForm.recipientName} onChange={(e) => setShippingForm((p) => ({ ...p, recipientName: e.target.value }))} />
-                  <input placeholder="SĐT người nhận" value={shippingForm.recipientPhone} onChange={(e) => setShippingForm((p) => ({ ...p, recipientPhone: e.target.value }))} />
-                  <input placeholder="Địa chỉ nhận hàng" value={shippingForm.recipientAddress} onChange={(e) => setShippingForm((p) => ({ ...p, recipientAddress: e.target.value }))} />
-                  <input type="number" placeholder="Phí vận chuyển" value={shippingForm.shippingFee} onChange={(e) => setShippingForm((p) => ({ ...p, shippingFee: Number(e.target.value) }))} />
-                  <input type="number" placeholder="Thu hộ COD" value={shippingForm.codAmount} onChange={(e) => setShippingForm((p) => ({ ...p, codAmount: Number(e.target.value) }))} />
-                  <input placeholder="Ghi chú" value={shippingForm.note} onChange={(e) => setShippingForm((p) => ({ ...p, note: e.target.value }))} />
-                  <button className="primary-btn" onClick={() => void createShipping()}>Lưu vận đơn</button>
-                </>
-              ) : (
-                <p className="text-muted">Bạn không có quyền tạo vận đơn.</p>
-              )}
-            </article>
-          </section>
-        )}
+                    <button className="ghost-btn" onClick={() => setOrderForm((p) => ({ ...p, lines: [...p.lines, { productId: "", quantity: 1, unitPrice: 0 }] }))}>+ Thêm sản phẩm</button>
+                    <button className="primary-btn" onClick={() => void createOrder()}>Lưu đơn hàng</button>
+                  </>
+                ) : (
+                  <p className="text-muted">Bạn không có quyền tạo đơn hàng.</p>
+                )
+              ) : null}
 
-        {activeModule === "users" && (
-          <section className="page-grid">
-            <article className="card wide">
-              <header className="card-head"><h2>Danh sách người dùng</h2></header>
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr><th>Tên đăng nhập</th><th>Vai trò</th><th>Trạng thái</th><th>Thao tác</th></tr>
-                  </thead>
-                  <tbody>
-                    {users.map((item) => (
-                      <tr key={item.id}>
-                        <td>{item.username}</td>
-                        <td>{item.role}</td>
-                        <td>{item.is_active ? "Hoạt động" : "Khóa"}</td>
-                        <td><button className="ghost-btn" onClick={() => void toggleUser(item)}>{item.is_active ? "Khóa" : "Mở khóa"}</button></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </article>
-            <article className="card">
-              <header className="card-head"><h2>Tạo người dùng</h2></header>
-              {canManageUsers ? (
-                <>
-                  <input placeholder="Tên đăng nhập" value={userForm.username} onChange={(e) => setUserForm((p) => ({ ...p, username: e.target.value }))} />
-                  <input type="password" placeholder="Mật khẩu" value={userForm.password} onChange={(e) => setUserForm((p) => ({ ...p, password: e.target.value }))} />
-                  <select value={userForm.role} onChange={(e) => setUserForm((p) => ({ ...p, role: e.target.value }))}>
-                    <option value="sales">sales</option>
-                    <option value="kho">kho</option>
-                    <option value="admin">admin</option>
-                  </select>
-                  <button className="primary-btn" onClick={() => void createUser()}>Lưu người dùng</button>
-                </>
-              ) : (
-                <p className="text-muted">Chỉ admin có quyền thao tác module này.</p>
-              )}
-            </article>
-          </section>
-        )}
+              {activeModal === "shipping" ? (
+                canManageShipping ? (
+                  <>
+                    <select value={shippingForm.orderId} onChange={(e) => setShippingForm((p) => ({ ...p, orderId: e.target.value }))}>
+                      <option value="">Không gắn đơn cụ thể</option>
+                      {orders.map((item) => (
+                        <option key={item.id} value={item.id}>{item.order_code}</option>
+                      ))}
+                    </select>
+                    <input placeholder="Mã vận đơn (để trống sẽ tự sinh)" value={shippingForm.shippingCode} onChange={(e) => setShippingForm((p) => ({ ...p, shippingCode: e.target.value }))} />
+                    <input placeholder="Đơn vị vận chuyển" value={shippingForm.carrier} onChange={(e) => setShippingForm((p) => ({ ...p, carrier: e.target.value }))} />
+                    <input placeholder="Dịch vụ (nhanh/tiết kiệm...)" value={shippingForm.serviceLevel} onChange={(e) => setShippingForm((p) => ({ ...p, serviceLevel: e.target.value }))} />
+                    <input placeholder="Tên người nhận" value={shippingForm.recipientName} onChange={(e) => setShippingForm((p) => ({ ...p, recipientName: e.target.value }))} />
+                    <input placeholder="SĐT người nhận" value={shippingForm.recipientPhone} onChange={(e) => setShippingForm((p) => ({ ...p, recipientPhone: e.target.value }))} />
+                    <input placeholder="Địa chỉ nhận hàng" value={shippingForm.recipientAddress} onChange={(e) => setShippingForm((p) => ({ ...p, recipientAddress: e.target.value }))} />
+                    <input type="number" placeholder="Phí vận chuyển" value={shippingForm.shippingFee} onChange={(e) => setShippingForm((p) => ({ ...p, shippingFee: Number(e.target.value) }))} />
+                    <input type="number" placeholder="Thu hộ COD" value={shippingForm.codAmount} onChange={(e) => setShippingForm((p) => ({ ...p, codAmount: Number(e.target.value) }))} />
+                    <input placeholder="Ghi chú" value={shippingForm.note} onChange={(e) => setShippingForm((p) => ({ ...p, note: e.target.value }))} />
+                    <button className="primary-btn" onClick={() => void createShipping()}>Lưu vận đơn</button>
+                  </>
+                ) : (
+                  <p className="text-muted">Bạn không có quyền tạo vận đơn.</p>
+                )
+              ) : null}
+
+              {activeModal === "user" ? (
+                canManageUsers ? (
+                  <>
+                    <input placeholder="Tên đăng nhập" value={userForm.username} onChange={(e) => setUserForm((p) => ({ ...p, username: e.target.value }))} />
+                    <input type="password" placeholder="Mật khẩu" value={userForm.password} onChange={(e) => setUserForm((p) => ({ ...p, password: e.target.value }))} />
+                    <select value={userForm.role} onChange={(e) => setUserForm((p) => ({ ...p, role: e.target.value }))}>
+                      <option value="sales">sales</option>
+                      <option value="kho">kho</option>
+                      <option value="admin">admin</option>
+                    </select>
+                    <button className="primary-btn" onClick={() => void createUser()}>Lưu người dùng</button>
+                  </>
+                ) : (
+                  <p className="text-muted">Chỉ admin có quyền thao tác module này.</p>
+                )
+              ) : null}
+            </div>
+          </div>
+        ) : null}
       </section>
     </main>
   );
