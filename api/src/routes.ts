@@ -8,6 +8,7 @@ import {
   listInventoryTransactions,
   listOrders,
   listProducts,
+  recordInventoryBulkTransaction,
   recordInventoryTransaction
 } from "./services/sales.js";
 import { broadcast } from "./realtime.js";
@@ -26,6 +27,29 @@ type WebhookRequest = FastifyRequest<{
   };
 }>;
 const allowedRoles = ["admin", "sales", "kho"] as const;
+
+async function ensureOperationalTables(): Promise<void> {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS shipments (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
+      shipping_code TEXT UNIQUE NOT NULL,
+      carrier TEXT NOT NULL,
+      service_level TEXT,
+      recipient_name TEXT NOT NULL,
+      recipient_phone TEXT,
+      recipient_address TEXT NOT NULL,
+      shipping_fee NUMERIC(14,2) NOT NULL DEFAULT 0,
+      cod_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+      status TEXT NOT NULL DEFAULT 'pending',
+      note TEXT,
+      shipped_at TIMESTAMPTZ,
+      delivered_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+}
 
 async function enqueueEvent(payload: SyncEventPayload): Promise<void> {
   const syncJob = await pool.query(
@@ -52,6 +76,8 @@ async function enqueueEvent(payload: SyncEventPayload): Promise<void> {
 }
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
+  await ensureOperationalTables();
+
   app.get("/health", async () => ({
     status: "ok",
     service: "qlkho-api",
@@ -65,6 +91,159 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
   app.get("/v1/orders", { preHandler: [requireRoles(["admin", "sales", "kho"])] }, async (request) => {
     const limit = Number((request.query as { limit?: string }).limit ?? "50");
     return listOrders(limit);
+  });
+
+  app.get("/v1/orders/:id", { preHandler: [requireRoles(["admin", "sales", "kho"])] }, async (request, reply) => {
+    const params = request.params as { id: string };
+    const orderResult = await pool.query(
+      `
+        SELECT o.*, c.full_name AS customer_name, c.phone AS customer_phone, c.email AS customer_email, c.address AS customer_address
+        FROM orders o
+        LEFT JOIN customers c ON c.id = o.customer_id
+        WHERE o.id = $1::uuid
+        LIMIT 1
+      `,
+      [params.id]
+    );
+    if (orderResult.rowCount === 0) {
+      return reply.code(404).send({ error: "Order not found" });
+    }
+
+    const itemResult = await pool.query(
+      `
+        SELECT oi.id, oi.quantity, oi.unit_price, p.id AS product_id, p.sku, p.name
+        FROM order_items oi
+        LEFT JOIN products p ON p.id = oi.product_id
+        WHERE oi.order_id = $1::uuid
+        ORDER BY oi.created_at ASC
+      `,
+      [params.id]
+    );
+
+    const shippingResult = await pool.query(
+      `
+        SELECT *
+        FROM shipments
+        WHERE order_id = $1::uuid
+        ORDER BY updated_at DESC
+      `,
+      [params.id]
+    );
+
+    return {
+      ...orderResult.rows[0],
+      items: itemResult.rows,
+      shipments: shippingResult.rows
+    };
+  });
+
+  app.post("/v1/orders", { preHandler: [requireRoles(["admin", "sales"])] }, async (request, reply) => {
+    const body = request.body as {
+      customerId?: string;
+      customer?: { fullName?: string; phone?: string; email?: string; address?: string };
+      source?: string;
+      status?: string;
+      items?: Array<{ productId?: string; quantity?: number; unitPrice?: number }>;
+    };
+    const items = Array.isArray(body.items) ? body.items : [];
+    if (items.length === 0) {
+      return reply.code(400).send({ error: "items is required" });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      let customerId = body.customerId ? String(body.customerId) : null;
+      if (!customerId && body.customer?.fullName) {
+        const customerResult = await client.query(
+          `
+            INSERT INTO customers(full_name, phone, email, address, updated_at)
+            VALUES($1, $2, $3, $4, NOW())
+            RETURNING id
+          `,
+          [
+            String(body.customer.fullName),
+            String(body.customer.phone ?? ""),
+            String(body.customer.email ?? ""),
+            String(body.customer.address ?? "")
+          ]
+        );
+        customerId = String(customerResult.rows[0].id);
+      }
+
+      let totalAmount = 0;
+      for (const item of items) {
+        totalAmount += Number(item.quantity ?? 0) * Number(item.unitPrice ?? 0);
+      }
+      const orderCode = `ORD-${Date.now()}`;
+      const orderResult = await client.query(
+        `
+          INSERT INTO orders(customer_id, order_code, status, total_amount, source, created_at, updated_at)
+          VALUES($1::uuid, $2, $3, $4, $5, NOW(), NOW())
+          RETURNING id
+        `,
+        [customerId, orderCode, String(body.status ?? "new"), totalAmount, String(body.source ?? "local")]
+      );
+      const orderId = String(orderResult.rows[0].id);
+
+      for (const item of items) {
+        const productId = String(item.productId ?? "");
+        const quantity = Math.max(1, Math.trunc(Number(item.quantity ?? 1)));
+        const unitPrice = Number(item.unitPrice ?? 0);
+        await client.query(
+          `
+            INSERT INTO order_items(order_id, product_id, quantity, unit_price)
+            VALUES($1::uuid, $2::uuid, $3, $4)
+          `,
+          [orderId, productId, quantity, unitPrice]
+        );
+      }
+
+      await client.query(
+        `
+          INSERT INTO sales_aggregate_daily(day, order_count, gross_revenue, updated_at)
+          VALUES (CURRENT_DATE, 1, $1, NOW())
+          ON CONFLICT(day)
+          DO UPDATE
+          SET order_count = sales_aggregate_daily.order_count + 1,
+              gross_revenue = sales_aggregate_daily.gross_revenue + EXCLUDED.gross_revenue,
+              updated_at = NOW()
+        `,
+        [totalAmount]
+      );
+
+      await client.query("COMMIT");
+      return reply.code(201).send({ ok: true, orderId, orderCode, totalAmount });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  });
+
+  app.patch("/v1/orders/:id/status", { preHandler: [requireRoles(["admin", "sales"])] }, async (request, reply) => {
+    const params = request.params as { id: string };
+    const body = request.body as { status?: string };
+    const status = String(body.status ?? "").trim();
+    if (!status) {
+      return reply.code(400).send({ error: "status is required" });
+    }
+    const result = await pool.query(
+      `
+        UPDATE orders
+        SET status = $2,
+            updated_at = NOW()
+        WHERE id = $1::uuid
+        RETURNING *
+      `,
+      [params.id, status]
+    );
+    if (result.rowCount === 0) {
+      return reply.code(404).send({ error: "Order not found" });
+    }
+    return result.rows[0];
   });
 
   app.get("/v1/products", { preHandler: [requireRoles(["admin", "sales", "kho"])] }, async (request) => {
@@ -355,6 +534,51 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     return reply.send({ ok: true });
   });
 
+  app.post("/v1/inventory/bulk", { preHandler: [requireRoles(["admin", "kho"])] }, async (request, reply) => {
+    const body = request.body as {
+      mode?: "in" | "out" | "adjust";
+      referenceCode?: string;
+      note?: string;
+      items?: Array<{ productId?: string; quantity?: number; unitCost?: number; note?: string }>;
+    };
+    const mode = (body.mode ?? "in") as "in" | "out" | "adjust";
+    const items = Array.isArray(body.items) ? body.items : [];
+    await recordInventoryBulkTransaction({
+      mode,
+      items: items.map((item) => ({
+        productId: String(item.productId ?? ""),
+        quantity: Number(item.quantity ?? 0),
+        unitCost: Number(item.unitCost ?? 0),
+        note: item.note
+      })),
+      referenceCode: body.referenceCode,
+      commonNote: body.note,
+      createdBy: getRequester(request).id
+    });
+    return reply.send({ ok: true, count: items.length });
+  });
+
+  app.post("/v1/inventory/adjustment", { preHandler: [requireRoles(["admin", "kho"])] }, async (request, reply) => {
+    const body = request.body as {
+      referenceCode?: string;
+      note?: string;
+      items?: Array<{ productId?: string; targetStock?: number; note?: string }>;
+    };
+    const items = Array.isArray(body.items) ? body.items : [];
+    await recordInventoryBulkTransaction({
+      mode: "adjust",
+      items: items.map((item) => ({
+        productId: String(item.productId ?? ""),
+        quantity: Number(item.targetStock ?? 0),
+        note: item.note
+      })),
+      referenceCode: body.referenceCode,
+      commonNote: body.note,
+      createdBy: getRequester(request).id
+    });
+    return reply.send({ ok: true, count: items.length });
+  });
+
   app.get("/v1/inventory/transactions", { preHandler: [requireRoles(["admin", "kho", "sales"])] }, async (request) => {
     const limit = Number((request.query as { limit?: string }).limit ?? "100");
     return listInventoryTransactions(limit);
@@ -391,6 +615,94 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       groupBy,
       channel: query.channel
     });
+  });
+
+  app.get("/v1/shippings", { preHandler: [requireRoles(["admin", "sales", "kho"])] }, async (request) => {
+    const limit = Number((request.query as { limit?: string }).limit ?? "100");
+    const safeLimit = Math.min(Math.max(limit, 1), 500);
+    const { rows } = await pool.query(
+      `
+        SELECT s.*, o.order_code, c.full_name AS customer_name
+        FROM shipments s
+        LEFT JOIN orders o ON o.id = s.order_id
+        LEFT JOIN customers c ON c.id = o.customer_id
+        ORDER BY s.updated_at DESC
+        LIMIT $1
+      `,
+      [safeLimit]
+    );
+    return rows;
+  });
+
+  app.post("/v1/shippings", { preHandler: [requireRoles(["admin", "sales"])] }, async (request, reply) => {
+    const body = request.body as {
+      orderId?: string;
+      shippingCode?: string;
+      carrier?: string;
+      serviceLevel?: string;
+      recipientName?: string;
+      recipientPhone?: string;
+      recipientAddress?: string;
+      shippingFee?: number;
+      codAmount?: number;
+      note?: string;
+    };
+    const shippingCode = String(body.shippingCode ?? `SHIP-${Date.now()}`);
+    const carrier = String(body.carrier ?? "").trim();
+    const recipientName = String(body.recipientName ?? "").trim();
+    const recipientAddress = String(body.recipientAddress ?? "").trim();
+    if (!carrier || !recipientName || !recipientAddress) {
+      return reply.code(400).send({ error: "carrier, recipientName, recipientAddress are required" });
+    }
+    const result = await pool.query(
+      `
+        INSERT INTO shipments(
+          order_id, shipping_code, carrier, service_level, recipient_name, recipient_phone, recipient_address,
+          shipping_fee, cod_amount, status, note, created_at, updated_at
+        )
+        VALUES($1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, 'pending', $10, NOW(), NOW())
+        RETURNING *
+      `,
+      [
+        body.orderId ? String(body.orderId) : null,
+        shippingCode,
+        carrier,
+        String(body.serviceLevel ?? ""),
+        recipientName,
+        String(body.recipientPhone ?? ""),
+        recipientAddress,
+        Number(body.shippingFee ?? 0),
+        Number(body.codAmount ?? 0),
+        String(body.note ?? "")
+      ]
+    );
+    return reply.code(201).send(result.rows[0]);
+  });
+
+  app.patch("/v1/shippings/:id/status", { preHandler: [requireRoles(["admin", "sales", "kho"])] }, async (request, reply) => {
+    const params = request.params as { id: string };
+    const body = request.body as { status?: string; note?: string };
+    const status = String(body.status ?? "").trim();
+    if (!status) {
+      return reply.code(400).send({ error: "status is required" });
+    }
+    const result = await pool.query(
+      `
+        UPDATE shipments
+        SET status = $2,
+            note = COALESCE($3, note),
+            shipped_at = CASE WHEN $2 = 'shipped' THEN COALESCE(shipped_at, NOW()) ELSE shipped_at END,
+            delivered_at = CASE WHEN $2 = 'delivered' THEN COALESCE(delivered_at, NOW()) ELSE delivered_at END,
+            updated_at = NOW()
+        WHERE id = $1::uuid
+        RETURNING *
+      `,
+      [params.id, status, body.note ?? null]
+    );
+    if (result.rowCount === 0) {
+      return reply.code(404).send({ error: "Shipping not found" });
+    }
+    return result.rows[0];
   });
 
   app.get("/v1/sync/dead-letters", { preHandler: [requireRoles(["admin"])] }, async (request) => {

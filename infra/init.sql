@@ -100,6 +100,25 @@ CREATE TABLE IF NOT EXISTS sales_aggregate_daily (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS shipments (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id UUID REFERENCES orders(id) ON DELETE SET NULL,
+  shipping_code TEXT UNIQUE NOT NULL,
+  carrier TEXT NOT NULL,
+  service_level TEXT,
+  recipient_name TEXT NOT NULL,
+  recipient_phone TEXT,
+  recipient_address TEXT NOT NULL,
+  shipping_fee NUMERIC(14,2) NOT NULL DEFAULT 0,
+  cod_amount NUMERIC(14,2) NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'pending',
+  note TEXT,
+  shipped_at TIMESTAMPTZ,
+  delivered_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE INDEX IF NOT EXISTS idx_orders_status_created_at ON orders(status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_source_created_at ON orders(source, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_orders_updated_at ON orders(updated_at DESC);
@@ -109,3 +128,5 @@ CREATE INDEX IF NOT EXISTS idx_sync_dead_letters_failed_at ON sync_dead_letters(
 CREATE INDEX IF NOT EXISTS idx_webhook_logs_received_at ON webhook_logs(received_at DESC);
 CREATE INDEX IF NOT EXISTS idx_inventory_transactions_product_created ON inventory_transactions(product_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_inventory_transactions_type_created ON inventory_transactions(type, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_shipments_status_updated ON shipments(status, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_shipments_order_id ON shipments(order_id);

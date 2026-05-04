@@ -161,6 +161,81 @@ export async function recordInventoryTransaction(input: {
   }
 }
 
+export async function recordInventoryBulkTransaction(input: {
+  mode: "in" | "out" | "adjust";
+  items: Array<{ productId: string; quantity: number; unitCost?: number; note?: string }>;
+  referenceCode?: string;
+  commonNote?: string;
+  createdBy?: string;
+}): Promise<void> {
+  if (!Array.isArray(input.items) || input.items.length === 0) {
+    throw new Error("items is required");
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    for (const item of input.items) {
+      const quantity = Math.trunc(Math.abs(item.quantity));
+      if (quantity <= 0) {
+        continue;
+      }
+
+      const productResult = await client.query(
+        `
+          SELECT stock
+          FROM products
+          WHERE id = $1
+          FOR UPDATE
+        `,
+        [item.productId]
+      );
+      if (productResult.rowCount === 0) {
+        throw new Error(`Product not found: ${item.productId}`);
+      }
+
+      const currentStock = Number(productResult.rows[0].stock);
+      const delta = input.mode === "out" ? -quantity : quantity;
+      const nextStock = input.mode === "adjust" ? quantity : currentStock + delta;
+      if (nextStock < 0) {
+        throw new Error("Insufficient stock");
+      }
+
+      await client.query(
+        `
+          UPDATE products
+          SET stock = $2,
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [item.productId, nextStock]
+      );
+
+      await client.query(
+        `
+          INSERT INTO inventory_transactions(product_id, type, quantity, unit_cost, reference_code, note, created_by)
+          VALUES($1, $2, $3, $4, $5, $6, $7)
+        `,
+        [
+          item.productId,
+          input.mode,
+          quantity,
+          item.unitCost ?? 0,
+          input.referenceCode ?? null,
+          item.note ?? input.commonNote ?? null,
+          input.createdBy ?? null
+        ]
+      );
+    }
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function listInventoryTransactions(limit = 100): Promise<Record<string, unknown>[]> {
   const safeLimit = Math.min(Math.max(limit, 1), 500);
   const { rows } = await pool.query(
