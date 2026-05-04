@@ -80,10 +80,16 @@ function formatDateTime(value: string): string {
 
 function getStatusClass(status: string): string {
   const normalized = status.toLowerCase();
-  if (normalized.includes("xac nhan") || normalized.includes("confirm") || normalized.includes("done")) {
+  if (
+    normalized.includes("xac nhan") ||
+    normalized.includes("xác nhận") ||
+    normalized.includes("đã xác nhận") ||
+    normalized.includes("confirm") ||
+    normalized.includes("done")
+  ) {
     return "badge success";
   }
-  if (normalized.includes("huy") || normalized.includes("cancel") || normalized.includes("fail")) {
+  if (normalized.includes("huy") || normalized.includes("hủy") || normalized.includes("cancel") || normalized.includes("fail")) {
     return "badge danger";
   }
   return "badge warning";
@@ -96,7 +102,7 @@ async function fetchJson<T>(path: string, token: string): Promise<T> {
     }
   });
   if (!response.ok) {
-    throw new Error(`Failed with status ${response.status}`);
+    throw new Error(`Yêu cầu thất bại, mã lỗi ${response.status}`);
   }
   return (await response.json()) as T;
 }
@@ -112,7 +118,7 @@ async function mutateJson<T>(path: string, token: string, method: string, body: 
   });
   if (!response.ok) {
     const text = await response.text();
-    throw new Error(text || `Failed with status ${response.status}`);
+    throw new Error(text || `Yêu cầu thất bại, mã lỗi ${response.status}`);
   }
   return (await response.json()) as T;
 }
@@ -232,7 +238,7 @@ export function App() {
       setEvents((prev) => [event.data, ...prev].slice(0, 12));
       void refresh();
     };
-    ws.onerror = () => setError("WebSocket disconnected. Check API route /ws.");
+    ws.onerror = () => setError("Mất kết nối WebSocket realtime. Vui lòng kiểm tra tuyến /ws.");
     return () => ws.close();
   }, [token]);
 
@@ -246,7 +252,7 @@ export function App() {
         body: JSON.stringify({ username, password })
       });
       if (!response.ok) {
-        throw new Error(`Login failed ${response.status}`);
+        throw new Error(`Đăng nhập thất bại (${response.status}).`);
       }
       const data = (await response.json()) as { token: string };
       setToken(data.token);
@@ -275,7 +281,7 @@ export function App() {
     if (!token) return;
     try {
       await mutateJson("/v1/products", token, "POST", productForm);
-      setFormMsg("Tao san pham thanh cong.");
+      setFormMsg("Tạo sản phẩm thành công.");
       setProductForm({ sku: "", name: "", category: "", unitPrice: 0, stock: 0 });
       await refresh();
     } catch (err) {
@@ -287,7 +293,7 @@ export function App() {
     if (!token) return;
     try {
       await mutateJson("/v1/customers", token, "POST", customerForm);
-      setFormMsg("Tao khach hang thanh cong.");
+      setFormMsg("Tạo khách hàng thành công.");
       setCustomerForm({ fullName: "", phone: "", email: "", address: "" });
       await refresh();
     } catch (err) {
@@ -305,7 +311,7 @@ export function App() {
         referenceCode: inventoryForm.referenceCode,
         note: inventoryForm.note
       });
-      setFormMsg("Cap nhat kho thanh cong.");
+      setFormMsg("Cập nhật kho thành công.");
       setInventoryForm({ productId: "", quantity: 1, referenceCode: "", note: "", mode: "inbound" });
       await refresh();
     } catch (err) {
@@ -317,7 +323,7 @@ export function App() {
     if (!token) return;
     try {
       await mutateJson("/v1/users", token, "POST", userForm);
-      setFormMsg("Tao user thanh cong.");
+      setFormMsg("Tạo người dùng thành công.");
       setUserForm({ username: "", password: "", role: "sales" });
       await refresh();
     } catch (err) {
@@ -337,17 +343,17 @@ export function App() {
         <>
           <section className="metrics-grid">
             <article className="metric-card">
-              <p className="metric-title">Don hom nay</p>
+              <p className="metric-title">Đơn hôm nay</p>
               <strong>{metrics?.todayOrders ?? 0}</strong>
-              <span className="metric-subtitle">Xu ly trong 24 gio</span>
+              <span className="metric-subtitle">Xử lý trong 24 giờ</span>
             </article>
             <article className="metric-card">
               <p className="metric-title">Doanh thu hom nay</p>
               <strong>{formatCurrency(metrics?.todayRevenue ?? 0)}</strong>
-              <span className="metric-subtitle">Tong gia tri don hang</span>
+              <span className="metric-subtitle">Tổng giá trị đơn hàng</span>
             </article>
             <article className="metric-card">
-              <p className="metric-title">San pham can nhap</p>
+              <p className="metric-title">Sản phẩm cần nhập</p>
               <strong>{metrics?.lowStockProducts ?? 0}</strong>
               <span className="metric-subtitle">Ton kho &lt;= 5</span>
             </article>
@@ -368,17 +374,17 @@ export function App() {
                   <thead>
                     <tr>
                       <th>Ma don</th>
-                      <th>Khach hang</th>
+                      <th>Khách hàng</th>
                       <th>Trang thai</th>
                       <th>Gia tri</th>
-                      <th>Cap nhat</th>
+                      <th>Cập nhật</th>
                     </tr>
                   </thead>
                   <tbody>
                     {orders.map((order) => (
                       <tr key={order.id}>
                         <td>{order.order_code}</td>
-                        <td>{order.customer_name || "Khach le"}</td>
+                        <td>{order.customer_name || "Khách lẻ"}</td>
                         <td>
                           <span className={getStatusClass(order.status)}>{order.status}</span>
                         </td>
@@ -413,7 +419,7 @@ export function App() {
             <div className="panel-header">
               <h2>Su kien realtime</h2>
             </div>
-            <pre className="event-log">{events.join("\n") || "No events yet"}</pre>
+            <pre className="event-log">{events.join("\n") || "Chưa có sự kiện realtime"}</pre>
           </section>
         </>
       );
@@ -424,7 +430,7 @@ export function App() {
         <section className="module-grid">
           <article className="panel">
             <div className="panel-header">
-              <h2>Danh sach san pham</h2>
+              <h2>Danh sách sản phẩm</h2>
             </div>
             <div className="table-wrap">
               <table>
@@ -452,7 +458,7 @@ export function App() {
             </div>
           </article>
           <article className="panel form-panel">
-            <h2>Them san pham</h2>
+            <h2>Thêm sản phẩm</h2>
             {canManageCatalog ? (
               <>
                 <input placeholder="SKU" value={productForm.sku} onChange={(e) => setProductForm((prev) => ({ ...prev, sku: e.target.value }))} />
@@ -471,11 +477,11 @@ export function App() {
                   onChange={(e) => setProductForm((prev) => ({ ...prev, stock: Number(e.target.value) }))}
                 />
                 <button className="primary-btn" onClick={submitProduct}>
-                  Luu san pham
+                  Lưu sản phẩm
                 </button>
               </>
             ) : (
-              <p className="muted">Role hien tai khong co quyen tao/cap nhat san pham.</p>
+              <p className="muted">Vai trò hiện tại không có quyền tạo/cập nhật sản phẩm.</p>
             )}
           </article>
         </section>
@@ -487,16 +493,16 @@ export function App() {
         <section className="module-grid">
           <article className="panel">
             <div className="panel-header">
-              <h2>Danh sach khach hang</h2>
+              <h2>Danh sách khách hàng</h2>
             </div>
             <div className="table-wrap">
               <table>
                 <thead>
                   <tr>
                     <th>Ten</th>
-                    <th>Dien thoai</th>
+                    <th>Điện thoại</th>
                     <th>Email</th>
-                    <th>Dia chi</th>
+                    <th>Địa chỉ</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -513,19 +519,19 @@ export function App() {
             </div>
           </article>
           <article className="panel form-panel">
-            <h2>Them khach hang</h2>
+            <h2>Thêm khách hàng</h2>
             {canManageCustomers ? (
               <>
                 <input placeholder="Ho ten" value={customerForm.fullName} onChange={(e) => setCustomerForm((prev) => ({ ...prev, fullName: e.target.value }))} />
                 <input placeholder="So dien thoai" value={customerForm.phone} onChange={(e) => setCustomerForm((prev) => ({ ...prev, phone: e.target.value }))} />
                 <input placeholder="Email" value={customerForm.email} onChange={(e) => setCustomerForm((prev) => ({ ...prev, email: e.target.value }))} />
-                <input placeholder="Dia chi" value={customerForm.address} onChange={(e) => setCustomerForm((prev) => ({ ...prev, address: e.target.value }))} />
+                <input placeholder="Địa chỉ" value={customerForm.address} onChange={(e) => setCustomerForm((prev) => ({ ...prev, address: e.target.value }))} />
                 <button className="primary-btn" onClick={submitCustomer}>
-                  Luu khach hang
+                  Lưu khách hàng
                 </button>
               </>
             ) : (
-              <p className="muted">Role hien tai khong co quyen tao khach hang.</p>
+              <p className="muted">Vai trò hiện tại không có quyền tạo khách hàng.</p>
             )}
           </article>
         </section>
@@ -537,7 +543,7 @@ export function App() {
         <section className="module-grid">
           <article className="panel">
             <div className="panel-header">
-              <h2>Lich su nhap xuat kho</h2>
+              <h2>Lịch sử nhập xuất kho</h2>
             </div>
             <div className="table-wrap">
               <table>
@@ -545,10 +551,10 @@ export function App() {
                   <tr>
                     <th>Loai</th>
                     <th>SKU</th>
-                    <th>San pham</th>
-                    <th>So luong</th>
+                    <th>Sản phẩm</th>
+                    <th>Số lượng</th>
                     <th>Ma tham chieu</th>
-                    <th>Thoi gian</th>
+                    <th>Thời gian</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -567,13 +573,13 @@ export function App() {
             </div>
           </article>
           <article className="panel form-panel">
-            <h2>Nhap / Xuat kho</h2>
+            <h2>Nhập / Xuất kho</h2>
             <select value={inventoryForm.mode} onChange={(e) => setInventoryForm((prev) => ({ ...prev, mode: e.target.value }))}>
-              <option value="inbound">Nhap kho</option>
-              <option value="outbound">Xuat kho</option>
+              <option value="inbound">Nhập kho</option>
+              <option value="outbound">Xuất kho</option>
             </select>
             <select value={inventoryForm.productId} onChange={(e) => setInventoryForm((prev) => ({ ...prev, productId: e.target.value }))}>
-              <option value="">Chon san pham</option>
+              <option value="">Chọn sản phẩm</option>
               {products.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.sku} - {item.name}
@@ -584,7 +590,7 @@ export function App() {
               type="number"
               value={inventoryForm.quantity}
               onChange={(e) => setInventoryForm((prev) => ({ ...prev, quantity: Number(e.target.value) }))}
-              placeholder="So luong"
+              placeholder="Số lượng"
             />
             <input
               value={inventoryForm.referenceCode}
@@ -593,7 +599,7 @@ export function App() {
             />
             <input value={inventoryForm.note} onChange={(e) => setInventoryForm((prev) => ({ ...prev, note: e.target.value }))} placeholder="Ghi chu" />
             <button className="primary-btn" onClick={submitInventory} disabled={!canManageInventory && currentUser?.role !== "sales"}>
-              Cap nhat kho
+              Cập nhật kho
             </button>
           </article>
         </section>
@@ -604,14 +610,14 @@ export function App() {
       <section className="module-grid">
         <article className="panel">
           <div className="panel-header">
-            <h2>Danh sach nguoi dung</h2>
+            <h2>Danh sách người dùng</h2>
           </div>
           <div className="table-wrap">
             <table>
               <thead>
                 <tr>
-                  <th>Username</th>
-                  <th>Role</th>
+                  <th>Tên đăng nhập</th>
+                  <th>Vai trò</th>
                   <th>Trang thai</th>
                   <th>Thao tac</th>
                 </tr>
@@ -634,7 +640,7 @@ export function App() {
           </div>
         </article>
         <article className="panel form-panel">
-          <h2>Tao tai khoan</h2>
+          <h2>Tạo tài khoản</h2>
           {canManageUsers ? (
             <>
               <input value={userForm.username} onChange={(e) => setUserForm((prev) => ({ ...prev, username: e.target.value }))} placeholder="Username" />
@@ -650,7 +656,7 @@ export function App() {
                 <option value="admin">admin</option>
               </select>
               <button className="primary-btn" onClick={submitUser}>
-                Tao user
+                Tạo người dùng
               </button>
             </>
           ) : (
@@ -666,24 +672,24 @@ export function App() {
       <main className="auth-page">
         <section className="auth-panel">
           <div className="auth-brand">
-            <p className="eyebrow">QLKho Platform</p>
-            <h1>Sales and Inventory Hub</h1>
-            <p>Quan ly ban hang realtime, dong bo nhanh.vn, theo doi ton kho tuc thi.</p>
+            <p className="eyebrow">Nền tảng QLKho</p>
+            <h1>Trung tâm Bán hàng và Kho</h1>
+            <p>Quản lý bán hàng realtime, đồng bộ nhanh.vn, theo dõi tồn kho tức thì.</p>
           </div>
         </section>
         <section className="auth-card">
-          <h2>Dang nhap he thong</h2>
-          <p>Su dung tai khoan co role admin, sales hoac kho.</p>
+          <h2>Đăng nhập hệ thống</h2>
+          <p>Sử dụng tài khoản có vai trò admin, sales hoặc kho.</p>
           <label>
-            Username
+            Tên đăng nhập
             <input value={username} onChange={(event) => setUsername(event.target.value)} />
           </label>
           <label>
-            Password
+            Mật khẩu
             <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
           </label>
           <button className="primary-btn" onClick={login}>
-            Dang nhap
+            Đăng nhập
           </button>
           {error ? <p className="error">{error}</p> : null}
         </section>
@@ -695,22 +701,22 @@ export function App() {
     <main className="dashboard">
       <header className="topbar">
         <div>
-          <p className="eyebrow">Realtime Operations</p>
-          <h1>Dashboard quan ly ban hang</h1>
-          <p className="muted">Dong bo nhanh.vn qua webhook va queue async.</p>
+          <p className="eyebrow">Vận hành thời gian thực</p>
+          <h1>Dashboard quản lý bán hàng</h1>
+          <p className="muted">Đồng bộ nhanh.vn qua webhook và queue async.</p>
         </div>
         <button className="ghost-btn" onClick={logout}>
-          Dang xuat
+          Đăng xuất
         </button>
       </header>
 
       <nav className="module-nav">
         {[
-          { id: "dashboard", label: "Dashboard" },
-          { id: "products", label: "San pham" },
-          { id: "customers", label: "Khach hang" },
+          { id: "dashboard", label: "Tổng quan" },
+          { id: "products", label: "Sản phẩm" },
+          { id: "customers", label: "Khách hàng" },
           { id: "inventory", label: "Kho" },
-          { id: "users", label: "Nguoi dung" }
+          { id: "users", label: "Người dùng" }
         ].map((item) => (
           <button
             key={item.id}

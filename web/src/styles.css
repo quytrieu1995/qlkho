@@ -1,22 +1,22 @@
 :root {
-  color-scheme: dark;
+  color-scheme: light;
   font-family: Inter, system-ui, -apple-system, sans-serif;
-  background: #050b18;
+  background: #f6fff8;
 }
 
 body {
   margin: 0;
-  background: radial-gradient(circle at top left, #172554, #050b18 45%);
-  color: #e2e8f0;
+  background: radial-gradient(circle at top left, #d9fbe5, #f6fff8 52%);
+  color: #14532d;
 }
 
 input {
   width: 100%;
   margin-top: 6px;
   margin-bottom: 12px;
-  background: #091224;
-  color: #f8fafc;
-  border: 1px solid #334155;
+  background: #ffffff;
+  color: #14532d;
+  border: 1px solid #86efac;
   border-radius: 10px;
   padding: 10px 12px;
 }
@@ -25,15 +25,15 @@ select {
   width: 100%;
   margin-top: 6px;
   margin-bottom: 12px;
-  background: #091224;
-  color: #f8fafc;
-  border: 1px solid #334155;
+  background: #ffffff;
+  color: #14532d;
+  border: 1px solid #86efac;
   border-radius: 10px;
   padding: 10px 12px;
 }
 
 button {
-  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  background: linear-gradient(135deg, #16a34a, #22c55e);
   color: #fff;
   border: 0;
   border-radius: 10px;
@@ -66,24 +66,25 @@ button:disabled {
   font-size: 12px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #93c5fd;
+  color: #15803d;
   font-weight: 700;
 }
 
 h1 {
   margin: 4px 0 6px;
   font-size: 30px;
-  color: #f8fafc;
+  color: #14532d;
 }
 
 .muted {
   margin: 0;
-  color: #94a3b8;
+  color: #4d7c0f;
 }
 
 .ghost-btn {
-  background: transparent;
-  border: 1px solid #334155;
+  background: #ffffff;
+  border: 1px solid #86efac;
+  color: #166534;
 }
 
 .metrics-grid {
@@ -101,21 +102,23 @@ h1 {
 }
 
 .tab-btn {
-  background: rgba(30, 41, 59, 0.7);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: #ffffff;
+  border: 1px solid #a7f3d0;
+  color: #166534;
 }
 
 .tab-btn.active {
-  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  background: linear-gradient(135deg, #16a34a, #22c55e);
+  color: #ffffff;
 }
 
 .metric-card,
 .panel {
-  background: rgba(15, 23, 42, 0.72);
-  border: 1px solid rgba(148, 163, 184, 0.2);
+  background: rgba(255, 255, 255, 0.95);
+  border: 1px solid #bbf7d0;
   border-radius: 14px;
   padding: 16px;
-  backdrop-filter: blur(6px);
+  box-shadow: 0 10px 24px rgba(22, 101, 52, 0.08);
 }
 
 .module-grid {
@@ -126,7 +129,7 @@ h1 {
 
 .metric-title {
   margin: 0;
-  color: #94a3b8;
+  color: #15803d;
   font-size: 13px;
 }
 
@@ -134,13 +137,13 @@ h1 {
   display: block;
   margin-top: 8px;
   font-size: 28px;
-  color: #fff;
+  color: #14532d;
 }
 
 .metric-subtitle {
   display: block;
   margin-top: 6px;
-  color: #64748b;
+  color: #4d7c0f;
   font-size: 12px;
 }
 
@@ -162,7 +165,7 @@ h1 {
 .panel-header h2 {
   margin: 0 0 12px;
   font-size: 18px;
-  color: #f8fafc;
+  color: #14532d;
 }
 
 .table-wrap {
@@ -178,13 +181,13 @@ table {
 th,
 td {
   text-align: left;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.18);
+  border-bottom: 1px solid #dcfce7;
   padding: 10px 8px;
   font-size: 14px;
 }
 
 th {
-  color: #94a3b8;
+  color: #15803d;
   font-weight: 600;
 }
 
@@ -202,8 +205,8 @@ th {
 }
 
 .badge.warning {
-  background: rgba(245, 158, 11, 0.22);
-  color: #fcd34d;
+  background: rgba(234, 179, 8, 0.2);
+  color: #a16207;
 }
 
 .badge.danger {
@@ -222,7 +225,7 @@ th {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  border-bottom: 1px dashed rgba(148, 163, 184, 0.22);
+  border-bottom: 1px dashed #bbf7d0;
   padding: 12px 0;
 }
 
@@ -237,13 +240,13 @@ th {
 .stock-list p {
   margin: 3px 0 0;
   font-size: 13px;
-  color: #94a3b8;
+  color: #4d7c0f;
 }
 
 .event-log {
   margin: 0;
-  background: #020617;
-  border: 1px solid #1e293b;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
   border-radius: 10px;
   padding: 12px;
   min-height: 110px;
@@ -261,8 +264,8 @@ th {
 
 .auth-panel {
   border-radius: 18px;
-  background: linear-gradient(145deg, rgba(30, 64, 175, 0.45), rgba(15, 23, 42, 0.68));
-  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: linear-gradient(145deg, rgba(34, 197, 94, 0.24), rgba(240, 253, 244, 0.9));
+  border: 1px solid #bbf7d0;
   display: flex;
   align-items: flex-end;
   padding: 24px;
@@ -274,13 +277,13 @@ th {
 
 .auth-brand p {
   margin: 0;
-  color: #cbd5e1;
+  color: #166534;
 }
 
 .auth-card {
-  background: rgba(15, 23, 42, 0.82);
+  background: #ffffff;
   border-radius: 18px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
+  border: 1px solid #bbf7d0;
   padding: 24px;
   display: flex;
   flex-direction: column;
@@ -289,13 +292,13 @@ th {
 
 .auth-card h2 {
   margin: 0 0 6px;
-  color: #f8fafc;
+  color: #14532d;
 }
 
 .auth-card > p {
   margin-top: 0;
   margin-bottom: 14px;
-  color: #94a3b8;
+  color: #4d7c0f;
 }
 
 .primary-btn {
@@ -308,7 +311,7 @@ th {
 }
 
 .error {
-  color: #fca5a5;
+  color: #b91c1c;
 }
 
 @media (max-width: 1040px) {
