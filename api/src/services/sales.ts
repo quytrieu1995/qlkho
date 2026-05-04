@@ -1,4 +1,4 @@
-import { pool } from "../db.js";
+import { pool, type DbClient } from "../db.js";
 import { getCache, purgePrefix, setCache } from "../cache.js";
 
 export interface DashboardMetrics {
@@ -91,7 +91,7 @@ export interface RevenueRow {
 type InventoryMode = "in" | "out" | "adjust";
 
 async function applyInventoryLine(
-  client: Awaited<ReturnType<typeof pool.connect>>,
+  client: DbClient,
   input: {
     mode: InventoryMode;
     productId: string;
