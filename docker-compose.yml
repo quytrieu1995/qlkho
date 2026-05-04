@@ -47,6 +47,7 @@ services:
         condition: service_healthy
     labels:
       - traefik.enable=true
+      - traefik.constraint-label=${TRAEFIK_CONSTRAINT_LABEL:-hostinger}
       - traefik.docker.network=${TRAEFIK_NETWORK:-traefik}
       - traefik.http.routers.qlkho-api.rule=Host(`${WEB_HOST}`) && PathPrefix(`/api`)
       - traefik.http.routers.qlkho-api.entrypoints=websecure
@@ -86,6 +87,7 @@ services:
       - api
     labels:
       - traefik.enable=true
+      - traefik.constraint-label=${TRAEFIK_CONSTRAINT_LABEL:-hostinger}
       - traefik.docker.network=${TRAEFIK_NETWORK:-traefik}
       - traefik.http.routers.qlkho-web.rule=Host(`${WEB_HOST}`) && !PathPrefix(`/api`)
       - traefik.http.routers.qlkho-web.entrypoints=websecure
@@ -124,6 +126,7 @@ services:
       - prometheus
     labels:
       - traefik.enable=true
+      - traefik.constraint-label=${TRAEFIK_CONSTRAINT_LABEL:-hostinger}
       - traefik.docker.network=${TRAEFIK_NETWORK:-traefik}
       - traefik.http.routers.qlkho-grafana.rule=Host(`${GRAFANA_HOST}`)
       - traefik.http.routers.qlkho-grafana.entrypoints=websecure
