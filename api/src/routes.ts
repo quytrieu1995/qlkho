@@ -1,7 +1,9 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import crypto from "crypto";
 import { syncQueue } from "./queue.js";
 import { pool } from "./db.js";
 import { fetchNhanhChangesForAccount, getDefaultNhanhAccountFromEnv, verifyNhanhSignature } from "./services/nhanh.js";
+import { NhanhV3Error, createNhanhV3Client, type NhanhV3Service } from "./services/nhanh-v3.js";
 import {
   getDashboardMetrics,
   getRevenueReport,
@@ -31,15 +33,79 @@ type WebhookRequest = FastifyRequest<{
   };
 }>;
 const allowedRoles = ["admin", "sales", "kho"] as const;
+const OAUTH_STATE_KEY_PREFIX = "oauth:nhanh:state:";
 type NhanhAccountRow = {
   id: string;
   name: string;
   app_id: string;
+  business_id: string;
   access_token: string;
   webhook_secret: string;
   base_url: string;
   is_active: boolean;
 };
+
+type NhanhOauthStateStoredContext = {
+  appId: string;
+  secretKey: string;
+  name?: string;
+  webhookSecret?: string;
+  baseUrl?: string;
+  service?: NhanhV3Service;
+  isActive?: boolean;
+  clientState?: string;
+};
+
+function toBase64UrlJson(value: unknown): string {
+  return Buffer.from(JSON.stringify(value), "utf8").toString("base64url");
+}
+
+function hmacSha256Base64Url(content: string, secret: string): string {
+  return crypto.createHmac("sha256", secret).update(content, "utf8").digest("base64url");
+}
+
+function createSignedOauthState(nonce: string, secret: string): string {
+  const payload = toBase64UrlJson({
+    v: 1,
+    n: nonce,
+    iat: Date.now()
+  });
+  const signature = hmacSha256Base64Url(payload, secret);
+  return `v1.${payload}.${signature}`;
+}
+
+function verifySignedOauthState(state: string, secret: string): { nonce: string } | null {
+  const parts = state.split(".");
+  if (parts.length !== 3 || parts[0] !== "v1") {
+    return null;
+  }
+
+  const payload = parts[1] ?? "";
+  const signature = parts[2] ?? "";
+  const expected = hmacSha256Base64Url(payload, secret);
+  const actualBuffer = Buffer.from(signature, "utf8");
+  const expectedBuffer = Buffer.from(expected, "utf8");
+  if (actualBuffer.length !== expectedBuffer.length) {
+    return null;
+  }
+  if (!crypto.timingSafeEqual(actualBuffer, expectedBuffer)) {
+    return null;
+  }
+
+  try {
+    const decoded = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
+      v?: number;
+      n?: string;
+      iat?: number;
+    };
+    if (decoded.v !== 1 || !decoded.n || typeof decoded.n !== "string") {
+      return null;
+    }
+    return { nonce: decoded.n };
+  } catch {
+    return null;
+  }
+}
 
 async function ensureOperationalTables(): Promise<void> {
   await pool.query(`
@@ -67,21 +133,23 @@ async function ensureOperationalTables(): Promise<void> {
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name TEXT NOT NULL,
       app_id TEXT NOT NULL,
+      business_id TEXT NOT NULL DEFAULT '',
       access_token TEXT NOT NULL,
       webhook_secret TEXT NOT NULL,
-      base_url TEXT NOT NULL DEFAULT 'https://open.nhanh.vn',
+      base_url TEXT NOT NULL DEFAULT 'https://pos.open.nhanh.vn',
       is_active BOOLEAN NOT NULL DEFAULT true,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  await pool.query("ALTER TABLE nhanh_accounts ADD COLUMN IF NOT EXISTS business_id TEXT NOT NULL DEFAULT ''");
 }
 
 async function getNhanhAccounts(opts?: { includeInactive?: boolean }) {
   const includeInactive = opts?.includeInactive ?? false;
   const { rows } = await pool.query<NhanhAccountRow>(
     `
-      SELECT id, name, app_id, access_token, webhook_secret, base_url, is_active
+      SELECT id, name, app_id, business_id, access_token, webhook_secret, base_url, is_active
       FROM nhanh_accounts
       WHERE ($1::boolean = true OR is_active = true)
       ORDER BY created_at DESC
@@ -93,6 +161,7 @@ async function getNhanhAccounts(opts?: { includeInactive?: boolean }) {
     id: row.id,
     name: row.name,
     appId: row.app_id,
+    businessId: row.business_id,
     accessToken: row.access_token,
     webhookSecret: row.webhook_secret,
     baseUrl: row.base_url,
@@ -132,6 +201,112 @@ async function enqueueEvent(payload: SyncEventPayload): Promise<void> {
 
 export async function registerRoutes(app: FastifyInstance): Promise<void> {
   await ensureOperationalTables();
+
+  async function exchangeNhanhTokenAndSaveAccount(input: {
+    name?: string;
+    appId: string;
+    secretKey: string;
+    accessCode: string;
+    webhookSecret?: string;
+    baseUrl?: string;
+    service?: NhanhV3Service;
+    isActive?: boolean;
+  }) {
+    const appId = String(input.appId ?? "").trim();
+    const secretKey = String(input.secretKey ?? "").trim();
+    const accessCode = String(input.accessCode ?? "").trim();
+    const requestedName = String(input.name ?? "").trim();
+    const service: NhanhV3Service = input.service === "vpage" ? "vpage" : "pos";
+    const baseUrl = String(
+      input.baseUrl ?? (service === "vpage" ? "https://vpage.open.nhanh.vn" : "https://pos.open.nhanh.vn")
+    ).trim();
+    const originalWebhookSecret = String(input.webhookSecret ?? "").trim();
+    const webhookSecret = originalWebhookSecret || crypto.randomBytes(24).toString("hex");
+    const isActive = typeof input.isActive === "boolean" ? input.isActive : true;
+
+    if (!appId || !secretKey || !accessCode) {
+      return {
+        statusCode: 400,
+        body: { error: "appId, secretKey, accessCode are required" }
+      };
+    }
+
+    const client = createNhanhV3Client({
+      appId,
+      secretKey,
+      baseUrl
+    });
+    const tokenData = await client.getAccessTokenFromCode(accessCode);
+    const businessId = String(tokenData.businessId);
+
+    // Double-check token validity before persisting into integration table.
+    await client.checkAccessToken({
+      businessId,
+      accessToken: tokenData.accessToken
+    });
+
+    const accountName = requestedName || `Nhanh ${appId}-${businessId}`;
+    const existing = await pool.query<{ id: string }>(
+      `
+        SELECT id
+        FROM nhanh_accounts
+        WHERE app_id = $1 AND business_id = $2
+        ORDER BY updated_at DESC
+        LIMIT 1
+      `,
+      [appId, businessId]
+    );
+
+    let saved;
+    if (existing.rowCount && existing.rows[0]) {
+      saved = await pool.query(
+        `
+          UPDATE nhanh_accounts
+          SET name = COALESCE(NULLIF($2, ''), name),
+              access_token = $3,
+              webhook_secret = COALESCE(NULLIF($4, ''), webhook_secret),
+              base_url = COALESCE(NULLIF($5, ''), base_url),
+              is_active = COALESCE($6, is_active),
+              updated_at = NOW()
+          WHERE id = $1::uuid
+          RETURNING id, name, app_id, business_id, access_token, webhook_secret, base_url, is_active
+        `,
+        [existing.rows[0].id, accountName, tokenData.accessToken, webhookSecret, baseUrl, isActive]
+      );
+    } else {
+      saved = await pool.query(
+        `
+          INSERT INTO nhanh_accounts(name, app_id, business_id, access_token, webhook_secret, base_url, is_active, updated_at)
+          VALUES($1, $2, $3, $4, $5, $6, COALESCE($7, true), NOW())
+          RETURNING id, name, app_id, business_id, access_token, webhook_secret, base_url, is_active
+        `,
+        [accountName, appId, businessId, tokenData.accessToken, webhookSecret, baseUrl, isActive]
+      );
+    }
+
+    const account = saved.rows[0];
+    return {
+      statusCode: existing.rowCount ? 200 : 201,
+      body: {
+        id: account.id,
+        name: account.name,
+        appId: account.app_id,
+        businessId: account.business_id,
+        accessToken: account.access_token,
+        webhookSecret: account.webhook_secret,
+        baseUrl: account.base_url,
+        isActive: account.is_active,
+        token: {
+          version: tokenData.version,
+          expiredAt: tokenData.expiredAt,
+          permissions: tokenData.permissions ?? [],
+          depotIds: tokenData.depotIds ?? [],
+          pageIds: tokenData.pageIds ?? []
+        },
+        generatedWebhookSecret: !originalWebhookSecret
+      }
+    };
+  }
 
   app.get("/health", async () => ({
     status: "ok",
@@ -557,6 +732,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       id: item.id,
       name: item.name,
       appId: item.appId,
+      businessId: item.businessId,
       accessToken: item.accessToken,
       webhookSecret: item.webhookSecret,
       baseUrl: item.baseUrl,
@@ -564,10 +740,99 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     }));
   });
 
+  app.post("/v1/integrations/nhanh/oauth-url", { preHandler: [requireRoles(["admin"])] }, async (request, reply) => {
+    const body = request.body as {
+      appId?: string;
+      secretKey?: string;
+      returnLink?: string;
+      version?: string;
+      state?: string;
+      prompt?: string;
+      name?: string;
+      webhookSecret?: string;
+      baseUrl?: string;
+      service?: NhanhV3Service;
+      isActive?: boolean;
+    };
+
+    const appId = String(body.appId ?? env.NHANH_APP_ID ?? "").trim();
+    const secretKey = String(body.secretKey ?? env.NHANH_SECRET_KEY ?? "").trim();
+    const returnLink = String(body.returnLink ?? "").trim();
+    const version = String(body.version ?? "2.0").trim();
+    const clientState = String(body.state ?? "").trim();
+    const prompt = String(body.prompt ?? "").trim();
+    const service: NhanhV3Service = body.service === "vpage" ? "vpage" : "pos";
+    const baseUrl = String(
+      body.baseUrl ?? (service === "vpage" ? "https://vpage.open.nhanh.vn" : "https://pos.open.nhanh.vn")
+    ).trim();
+    const oauthStateSecret = env.NHANH_OAUTH_STATE_SECRET;
+    const stateTtlSeconds = env.NHANH_OAUTH_STATE_TTL_SECONDS;
+
+    if (!appId || !secretKey || !returnLink) {
+      return reply.code(400).send({ error: "appId, secretKey and returnLink are required" });
+    }
+
+    let parsedReturnLink: URL;
+    try {
+      parsedReturnLink = new URL(returnLink);
+    } catch {
+      return reply.code(400).send({ error: "returnLink must be a valid URL" });
+    }
+
+    if (parsedReturnLink.protocol !== "https:") {
+      return reply.code(400).send({ error: "returnLink must use https" });
+    }
+
+    const nonce = crypto.randomBytes(18).toString("hex");
+    const signedState = createSignedOauthState(nonce, oauthStateSecret);
+    const stateKey = `${OAUTH_STATE_KEY_PREFIX}${nonce}`;
+    const stateContext: NhanhOauthStateStoredContext = {
+      appId,
+      secretKey,
+      name: String(body.name ?? "").trim() || undefined,
+      webhookSecret: String(body.webhookSecret ?? "").trim() || undefined,
+      baseUrl,
+      service,
+      isActive: typeof body.isActive === "boolean" ? body.isActive : true,
+      clientState: clientState || undefined
+    };
+    const stored = await redis.set(stateKey, JSON.stringify(stateContext), "EX", stateTtlSeconds, "NX");
+    if (stored !== "OK") {
+      return reply.code(500).send({ error: "Unable to initialize OAuth state" });
+    }
+
+    const oauthUrl = new URL("https://nhanh.vn/oauth");
+    oauthUrl.searchParams.set("version", version);
+    oauthUrl.searchParams.set("appId", appId);
+    oauthUrl.searchParams.set("returnLink", returnLink);
+    oauthUrl.searchParams.set("state", signedState);
+    if (prompt) {
+      oauthUrl.searchParams.set("prompt", prompt);
+    }
+
+    return reply.send({
+      oauthUrl: oauthUrl.toString(),
+      expiresInSeconds: stateTtlSeconds,
+      params: {
+        version,
+        appId,
+        returnLink,
+        state: signedState,
+        ...(prompt ? { prompt } : {})
+      },
+      meta: {
+        service,
+        baseUrl,
+        hasClientState: Boolean(clientState)
+      }
+    });
+  });
+
   app.post("/v1/integrations/nhanh/accounts", { preHandler: [requireRoles(["admin"])] }, async (request, reply) => {
     const body = request.body as {
       name?: string;
       appId?: string;
+      businessId?: string;
       accessToken?: string;
       webhookSecret?: string;
       baseUrl?: string;
@@ -575,24 +840,26 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     };
     const name = String(body.name ?? "").trim();
     const appId = String(body.appId ?? "").trim();
+    const businessId = String(body.businessId ?? "").trim();
     const accessToken = String(body.accessToken ?? "").trim();
     const webhookSecret = String(body.webhookSecret ?? "").trim();
-    const baseUrl = String(body.baseUrl ?? "https://open.nhanh.vn").trim();
-    if (!name || !appId || !accessToken || !webhookSecret) {
-      return reply.code(400).send({ error: "name, appId, accessToken, webhookSecret are required" });
+    const baseUrl = String(body.baseUrl ?? "https://pos.open.nhanh.vn").trim();
+    if (!name || !appId || !businessId || !accessToken || !webhookSecret) {
+      return reply.code(400).send({ error: "name, appId, businessId, accessToken, webhookSecret are required" });
     }
     const result = await pool.query(
       `
-        INSERT INTO nhanh_accounts(name, app_id, access_token, webhook_secret, base_url, is_active, updated_at)
-        VALUES($1, $2, $3, $4, $5, COALESCE($6, true), NOW())
-        RETURNING id, name, app_id, access_token, webhook_secret, base_url, is_active
+        INSERT INTO nhanh_accounts(name, app_id, business_id, access_token, webhook_secret, base_url, is_active, updated_at)
+        VALUES($1, $2, $3, $4, $5, $6, COALESCE($7, true), NOW())
+        RETURNING id, name, app_id, business_id, access_token, webhook_secret, base_url, is_active
       `,
-      [name, appId, accessToken, webhookSecret, baseUrl, typeof body.isActive === "boolean" ? body.isActive : true]
+      [name, appId, businessId, accessToken, webhookSecret, baseUrl, typeof body.isActive === "boolean" ? body.isActive : true]
     );
     return reply.code(201).send({
       id: result.rows[0].id,
       name: result.rows[0].name,
       appId: result.rows[0].app_id,
+      businessId: result.rows[0].business_id,
       accessToken: result.rows[0].access_token,
       webhookSecret: result.rows[0].webhook_secret,
       baseUrl: result.rows[0].base_url,
@@ -600,11 +867,119 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     });
   });
 
+  app.post("/v1/integrations/nhanh/accounts/exchange-token", { preHandler: [requireRoles(["admin"])] }, async (request, reply) => {
+    const body = request.body as {
+      name?: string;
+      appId?: string;
+      secretKey?: string;
+      accessCode?: string;
+      webhookSecret?: string;
+      baseUrl?: string;
+      service?: NhanhV3Service;
+      isActive?: boolean;
+    };
+
+    try {
+      const result = await exchangeNhanhTokenAndSaveAccount({
+        name: body.name,
+        appId: String(body.appId ?? ""),
+        secretKey: String(body.secretKey ?? ""),
+        accessCode: String(body.accessCode ?? ""),
+        webhookSecret: body.webhookSecret,
+        baseUrl: body.baseUrl,
+        service: body.service,
+        isActive: body.isActive
+      });
+      return reply.code(result.statusCode).send(result.body);
+    } catch (error) {
+      if (error instanceof NhanhV3Error) {
+        return reply.code(400).send({
+          error: error.message,
+          nhanh: error.details
+        });
+      }
+      throw error;
+    }
+  });
+
+  app.get("/v1/integrations/nhanh/oauth-callback", async (request, reply) => {
+    const query = request.query as {
+      accessCode?: string;
+      state?: string;
+      error?: string;
+      errorDescription?: string;
+    };
+
+    if (query.error) {
+      return reply.code(400).send({
+        error: "Nhanh OAuth authorization failed",
+        oauth: {
+          code: query.error,
+          description: query.errorDescription ?? ""
+        }
+      });
+    }
+    const accessCode = String(query.accessCode ?? "").trim();
+    const signedState = String(query.state ?? "").trim();
+    if (!accessCode || !signedState) {
+      return reply.code(400).send({ error: "accessCode and state are required" });
+    }
+
+    const verified = verifySignedOauthState(signedState, env.NHANH_OAUTH_STATE_SECRET);
+    if (!verified) {
+      return reply.code(400).send({ error: "Invalid OAuth state signature" });
+    }
+
+    const stateKey = `${OAUTH_STATE_KEY_PREFIX}${verified.nonce}`;
+    const stateOps = await redis.multi().get(stateKey).del(stateKey).exec();
+    const stateRaw = String(stateOps?.[0]?.[1] ?? "").trim();
+    if (!stateRaw) {
+      return reply.code(400).send({ error: "OAuth state is expired or already used" });
+    }
+
+    let stateContext: NhanhOauthStateStoredContext;
+    try {
+      stateContext = JSON.parse(stateRaw) as NhanhOauthStateStoredContext;
+    } catch {
+      return reply.code(400).send({ error: "OAuth state payload is invalid" });
+    }
+
+    try {
+      const result = await exchangeNhanhTokenAndSaveAccount({
+        name: stateContext.name,
+        appId: stateContext.appId ?? "",
+        secretKey: stateContext.secretKey ?? "",
+        accessCode,
+        webhookSecret: stateContext.webhookSecret,
+        baseUrl: stateContext.baseUrl,
+        service: stateContext.service,
+        isActive: stateContext.isActive
+      });
+
+      return reply.code(result.statusCode).send({
+        ...result.body,
+        oauth: {
+          state: stateContext.clientState ?? "",
+          consumed: true
+        }
+      });
+    } catch (error) {
+      if (error instanceof NhanhV3Error) {
+        return reply.code(400).send({
+          error: error.message,
+          nhanh: error.details
+        });
+      }
+      throw error;
+    }
+  });
+
   app.put("/v1/integrations/nhanh/accounts/:id", { preHandler: [requireRoles(["admin"])] }, async (request, reply) => {
     const params = request.params as { id: string };
     const body = request.body as {
       name?: string;
       appId?: string;
+      businessId?: string;
       accessToken?: string;
       webhookSecret?: string;
       baseUrl?: string;
@@ -615,18 +990,20 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
         UPDATE nhanh_accounts
         SET name = COALESCE(NULLIF($2, ''), name),
             app_id = COALESCE(NULLIF($3, ''), app_id),
-            access_token = COALESCE(NULLIF($4, ''), access_token),
-            webhook_secret = COALESCE(NULLIF($5, ''), webhook_secret),
-            base_url = COALESCE(NULLIF($6, ''), base_url),
-            is_active = COALESCE($7, is_active),
+            business_id = COALESCE(NULLIF($4, ''), business_id),
+            access_token = COALESCE(NULLIF($5, ''), access_token),
+            webhook_secret = COALESCE(NULLIF($6, ''), webhook_secret),
+            base_url = COALESCE(NULLIF($7, ''), base_url),
+            is_active = COALESCE($8, is_active),
             updated_at = NOW()
         WHERE id = $1::uuid
-        RETURNING id, name, app_id, access_token, webhook_secret, base_url, is_active
+        RETURNING id, name, app_id, business_id, access_token, webhook_secret, base_url, is_active
       `,
       [
         params.id,
         body.name ?? "",
         body.appId ?? "",
+        body.businessId ?? "",
         body.accessToken ?? "",
         body.webhookSecret ?? "",
         body.baseUrl ?? "",
@@ -640,6 +1017,7 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
       id: result.rows[0].id,
       name: result.rows[0].name,
       appId: result.rows[0].app_id,
+      businessId: result.rows[0].business_id,
       accessToken: result.rows[0].access_token,
       webhookSecret: result.rows[0].webhook_secret,
       baseUrl: result.rows[0].base_url,
@@ -935,6 +1313,16 @@ export async function registerRoutes(app: FastifyInstance): Promise<void> {
     const selectedAccounts = accountIds.length > 0 ? allAccounts.filter((item) => accountIds.includes(item.id)) : allAccounts;
     if (selectedAccounts.length === 0) {
       return reply.code(400).send({ error: "No active nhanh account found" });
+    }
+
+    const invalidAccounts = selectedAccounts
+      .filter((item) => !item.businessId || item.businessId.trim().length === 0)
+      .map((item) => item.id);
+    if (invalidAccounts.length > 0) {
+      return reply.code(400).send({
+        error: "Some nhanh accounts are missing businessId",
+        accountIds: invalidAccounts
+      });
     }
 
     let totalChanges = 0;
